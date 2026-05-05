@@ -292,8 +292,8 @@ def main():
     ratings_df = clean_ratings(inp / "ratings.csv")
     ratings_df.to_csv(out / "ratings_clean.csv", index=False)
 
-    ratings_small_df = clean_ratings(inp / "ratings_small.csv")
-    ratings_small_df.to_csv(out / "ratings_small_clean.csv", index=False)
+    # ratings_small_df = clean_ratings(inp / "ratings_small.csv")
+    # ratings_small_df.to_csv(out / "ratings_small_clean.csv", index=False)
     
     # links
     links_df = clean_links(inp / "links.csv")
