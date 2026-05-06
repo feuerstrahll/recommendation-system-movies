@@ -8,8 +8,6 @@
 - `database/` - `clean_movies_data.py`, `schema.sql`, `check_db.py`, ER-диаграмма и SQLite-снимок.
 - `recommender/` - cold-start и hybrid recommender.
 - `evaluation/` - метрики.
-- `report/` - отчетные материалы.
-- `demo.py` - старый демонстрационный entry point, может требовать обновления под текущие колонки.
 
 ## Актуальный контракт данных
 
@@ -33,8 +31,6 @@ ratings.movielens_id = исходный MovieLens id
 - `crew_clean.csv`
 
 ## Подготовка данных
-
-Из папки `lab-5/recommendation-system-lab5`:
 
 ```powershell
 python database/clean_movies_data.py
