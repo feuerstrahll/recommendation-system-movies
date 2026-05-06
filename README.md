@@ -1,2 +1,12 @@
-# recommendation-system-movies
-[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=F76B18&random=true&width=435&lines=%D0%9A%D1%82%D0%BE+%D1%81%D0%B5%D0%B9%D1%87%D0%B0%D1%81+%D0%BD%D0%B5+%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82%3A+%D0%94%D0%B5%D0%BD%D0%B8%D1%81;%D0%9A%D1%82%D0%BE+%D1%81%D0%B5%D0%B9%D1%87%D0%B0%D1%81+%D0%BD%D0%B5+%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82%3A+%D0%9D%D0%B0%D1%81%D1%82%D1%8F;%D0%9A%D1%82%D0%BE+%D1%81%D0%B5%D0%B9%D1%87%D0%B0%D1%81+%D0%BD%D0%B5+%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82%3A+%D0%9A%D0%B8%D1%80%D0%B8%D0%BB%D0%BB)](https://git.io/typing-svg)
+# Lab 5: Movie Recommendation System
+
+Лабораторная работа по рекомендательным системам для фильмов.
+
+Ключевые части:
+
+- `data/processed/` - актуальные очищенные CSV.
+- `database/` - очистка данных, PostgreSQL-схема, проверка БД
+- `recommender/` - Реализация рекомендательных систем
+
+Главный идентификатор фильмов в актуальных данных - `movie_id`, то есть TMDB id.
+Поле `movielens_id` сохранено в `ratings.csv` как справочная связь с исходным MovieLens id.
