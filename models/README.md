@@ -57,6 +57,8 @@
 | Nothing Personal | 9.867862e+05 |
 | W.R. - Mysteries of the Organism | 9.846798e+05 |
 | Tuvalu | 5.415688e+05 |
+#### Metrtics
+
 --- LightFM Native Metrics ---
 ROC AUC Score (Sampled 500 Users): 0.7277
 done
