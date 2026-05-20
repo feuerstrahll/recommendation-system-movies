@@ -50,7 +50,7 @@ def get_ratings_lightfm(ratings_df, movies_df, n_reviews=5):
     internal_item_indices = np.array([item_id_map[item_id] for item_id in unrated_items], dtype=np.int32)
     user_array = np.full(len(internal_item_indices), internal_user_index, dtype=np.int32)
 
-    predictions = model.predict(user_array, internal_item_indices, num_threads=4)
+    predictions = model.predict(user_array, internal_item_indices, num_threads=1)
 
     results_df = pd.DataFrame({'movieId': unrated_items, 'lightfm_score': predictions})
     results_df = results_df.sort_values('lightfm_score', ascending=False)
@@ -112,31 +112,42 @@ if __name__ == '__main__':
     model = LightFM(no_components=100, learning_rate=0.01, item_alpha=0.05, user_alpha=0.05, loss='warp', random_state=42)
     
     # Added verbose=True to show progress bars per training epoch
-    model.fit(train_interactions, epochs=5, num_threads=4, verbose=True)
+    model.fit(train_interactions, epochs=5, num_threads=1, verbose=True)
     
-    # 4. Metric Evaluation
-    print("Evaluating LightFM Native AUC Metric...")
-    # --- FIXED: Limit user count to prevent memory stalling ---
-    # We sample evaluation on 2000 users. This provides a statistically stable 
-    # score while cutting down evaluation time from hours to seconds.
+             # 4. Metric Evaluation
+    print("Evaluating LightFM Native AUC Metric (Optimized Sampling)...")
+    
+    # 1. Find all unique users in the test set
     test_users_with_interactions = np.unique(test_interactions.row)
-    if len(test_users_with_interactions) > 2000:
-        sampled_users = np.random.choice(test_users_with_interactions, size=2000, replace=False).astype(np.int32)
-    else:
-        sampled_users = test_users_with_interactions.astype(np.int32)
-        
-    auc = auc_score(
-        model, 
-        test_interactions, 
-        train_interactions=train_interactions, 
-        user_features=None, 
-        item_features=None,
-        num_threads=4
+    
+    # 2. Pick a random sample of 500 users
+    np.random.seed(42)
+    sampled_users = np.random.choice(test_users_with_interactions, size=500, replace=False)
+    
+    # 3. Create a boolean mask to filter test matrix data rows quickly
+    test_coo = test_interactions.tocoo()
+    # Fast vectorized checking using np.isin
+    mask = np.isin(test_coo.row, sampled_users)
+    
+    from scipy.sparse import coo_matrix
+    sampled_test_interactions = coo_matrix(
+        (test_coo.data[mask], (test_coo.row[mask], test_coo.col[mask])),
+        shape=test_interactions.shape  # Essential: Maintains the original shape!
     )
     
-    # Calculate the mean score only for our targeted user sample group
-    final_auc_score = auc[sampled_users].mean()
+    # 4. Calculate AUC swiftly on the sparse slice
+    auc = auc_score(
+        model, 
+        sampled_test_interactions, 
+        train_interactions=train_interactions, # Pass the original intact train matrix
+        num_threads=1
+    )
+    
+    # 5. FIXED: The 'auc' array already contains exactly one entry per user 
+    # present in 'sampled_test_interactions'. Taking its mean is correct.
+    final_auc_score = auc.mean()
     
     print("\n--- LightFM Native Metrics ---")
-    print(f"ROC AUC Score (Sampled): {final_auc_score:.4f}")
+    print(f"ROC AUC Score (Sampled 500 Users): {final_auc_score:.4f}")
     print("done")
+
