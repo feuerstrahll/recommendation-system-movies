@@ -114,7 +114,7 @@ if __name__ == '__main__':
     # Added verbose=True to show progress bars per training epoch
     model.fit(train_interactions, epochs=5, num_threads=1, verbose=True)
     
-             # 4. Metric Evaluation
+                 # 4. Metric Evaluation & Plotting
     print("Evaluating LightFM Native AUC Metric (Optimized Sampling)...")
     
     # 1. Find all unique users in the test set
@@ -126,7 +126,6 @@ if __name__ == '__main__':
     
     # 3. Create a boolean mask to filter test matrix data rows quickly
     test_coo = test_interactions.tocoo()
-    # Fast vectorized checking using np.isin
     mask = np.isin(test_coo.row, sampled_users)
     
     from scipy.sparse import coo_matrix
@@ -143,11 +142,68 @@ if __name__ == '__main__':
         num_threads=1
     )
     
-    # 5. FIXED: The 'auc' array already contains exactly one entry per user 
-    # present in 'sampled_test_interactions'. Taking its mean is correct.
+    # The 'auc' array contains exactly one entry per user present in 'sampled_test_interactions'
     final_auc_score = auc.mean()
     
+    # --- Generate Global ROC Curve Data Arrays ---
+    print("Extracting prediction scores for ROC Curve generation...")
+    import os
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import roc_curve, auc as sklearn_auc
+    
+    all_labels = []
+    all_predictions = []
+    
+    # Build complete item index pool for predictions
+    n_items = test_interactions.shape[1]
+    all_items = np.arange(n_items, dtype=np.int32)
+    
+    # Extract binary labels and prediction scores user by user
+    # Convert test_interactions to CSR once for ultra-fast row slicing
+    test_csr = test_interactions.tocsr()
+    
+    for user_id in sampled_users[:50]:
+        # Fast sparse row retrieval
+        user_test_row = test_csr[user_id].toarray().flatten()
+        true_labels = (user_test_row > 0).astype(int)
+        
+        # Skip user if they have zero ground-truth positive interactions
+        if np.sum(true_labels) == 0:
+            continue
+            
+        # Get raw ranking prediction scores from LightFM
+        user_array = np.full(n_items, user_id, dtype=np.int32)
+        pred_scores = model.predict(user_array, all_items, num_threads=1)
+        
+        all_labels.extend(true_labels)
+        all_predictions.extend(pred_scores)
+        
+    # Compute global micro-ROC curve points
+    fpr, tpr, thresholds = roc_curve(all_labels, all_predictions)
+    roc_auc_val = sklearn_auc(fpr, tpr)
+    
+    # --- Plot and Render ROC Graphical Layout ---
+    print("Generating ROC Curve plot...")
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC Curve (Area = {roc_auc_val:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Guess')
+    
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate (FPR)')
+    plt.ylabel('True Positive Rate (TPR)')
+    plt.title('Receiver Operating Characteristic (ROC) - LightFM Model')
+    plt.legend(loc="lower right")
+    plt.grid(True, alpha=0.3)
+    
+    # Save chart as PNG graphic in current working directory
+    output_image_path = "lightfm_roc_curve.png"
+    plt.savefig(output_image_path, dpi=300)
+    plt.close()
+    
     print("\n--- LightFM Native Metrics ---")
-    print(f"ROC AUC Score (Sampled 500 Users): {final_auc_score:.4f}")
+    print(f"ROC AUC Score (Macro Average 500 Users): {final_auc_score:.4f}")
+    print(f"ROC Graph Area Under Curve (Sampled 50 Users): {roc_auc_val:.4f}")
+    print(f"Success! ROC Curve graphic saved to: {os.path.abspath(output_image_path)}")
     print("done")
 
