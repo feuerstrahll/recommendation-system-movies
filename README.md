@@ -154,21 +154,6 @@ artifacts from relevant project runs. For a reproducible comparison:
   same protocol;
 - distinguish observed measurements from estimates or design targets.
 
-## Known limitations
-
-- The documentation does not establish a completed runtime connection between
-  the `main` model scripts and the `feature/dev` questionnaire.
-- No automated test suite, load test, security review, or deployment
-  verification is claimed here.
-- Raw LightFM scores are ranking values, not calibrated probabilities or star
-  ratings.
-- Branch contents can diverge; review the relevant files before merging or
-  copying code.
-
-## Presentation
-
-[`movie-recommendation-system.html`](movie-recommendation-system.html) is a
-standalone summary of the same scope and source attribution.
 
 ## Contributing
 
