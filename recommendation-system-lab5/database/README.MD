@@ -1,73 +1,51 @@
-# Database
+# Data Preparation and Database Notes
 
-Папка содержит актуальные файлы для подготовки и проверки базы данных рекомендательной системы.
+This page summarizes the data information used in the presentation. Database
+files can differ between branches, so paths and schemas should be checked
+against the branch being run.
 
-## Файлы
+## Recorded dataset scale
 
-- `clean_movies_data.py` - очистка The Movies Dataset и сборка финальных CSV.
-- `schema.sql` - актуальная PostgreSQL-схема.
-- `check_db.py` - проверка структуры таблиц и ссылочной целостности в PostgreSQL.
-- `database_architecture.md` - описание таблиц и связей.
-- `er_diagram.mmd` - Mermaid ER-диаграмма.
-- `recommender.db` - SQLite-снимок для локальных экспериментов.
+| Movies | Ratings | MovieLens users | Features per movie |
+|---:|---:|---:|---:|
+| 45K+ | 270K+ | 671 | 20+ |
 
-## Очистка данных
+The project combines MovieLens interactions with The Movies Dataset (TMDB).
+Documented processed files include:
 
-Из папки `lab-5/recommendation-system-lab5`:
+- `movies.csv`;
+- `ratings.csv`;
+- `movies_clean.csv`;
+- `ratings_clean.csv`;
+- `links_clean.csv`;
+- `keywords_clean.csv`;
+- `cast_clean.csv`;
+- `crew_clean.csv`.
 
-```powershell
-python database/clean_movies_data.py
+## Identifier contract
+
+The documented project convention is:
+
+```text
+movies.movie_id     = TMDB id
+ratings.movie_id    = TMDB id
+ratings.movielens_id = original MovieLens id, retained for mapping
 ```
 
-По умолчанию:
+Verify the actual column names before combining files from different branches.
+The cold-start module in `feature/dev` may expect camel-case names such as
+`movieId`, while other project files use snake-case names.
 
-- input: `data/raw`
-- output: `data/processed`
+## Data checks
 
-Явный запуск:
+Before training or evaluating a model:
 
-```powershell
-python database/clean_movies_data.py --input data/raw --output data/processed
-```
+1. confirm that movie ids use the same identifier system;
+2. remove or document unresolved identifier mappings;
+3. check duplicate movies and ratings;
+4. record filtering and missing-value rules;
+5. verify that train/test splitting does not leak user interactions.
 
-Скрипт ожидает исходные файлы:
-
-- `movies_metadata.csv`
-- `credits.csv`
-- `keywords.csv`
-- `ratings.csv`
-- `links.csv`
-
-## Выходные CSV
-
-- `movies.csv` - финальная таблица фильмов, ключ `movie_id` равен TMDB id.
-- `ratings.csv` - финальные оценки, `movie_id` уже приведен к TMDB id.
-- `movies_clean.csv`, `ratings_clean.csv`, `links_clean.csv`
-- `keywords_clean.csv`, `cast_clean.csv`, `crew_clean.csv`
-
-`movielens_id` в `ratings.csv` сохранен как исходный MovieLens id, но основной ключ для рекомендаций - `movie_id`.
-
-## PostgreSQL
-
-Применение схемы:
-
-```powershell
-psql -U postgres -d movies_db -f database/schema.sql
-```
-
-Проверка БД:
-
-```powershell
-python database/check_db.py --db movies_db --user postgres --password secret
-```
-
-`check_db.py` проверяет:
-
-- наличие ожидаемых таблиц и колонок;
-- `ratings.movie_id -> movies.movie_id`;
-- `movie_keywords.movie_id -> movies.movie_id`;
-- `movie_keywords.keyword_id -> keywords.keyword_id`;
-- `cast_members.movie_id -> movies.movie_id`;
-- `crew_members.movie_id -> movies.movie_id`.
-
-Важно: `links.tmdb_id` не имеет FK на `movies.movie_id`, потому что `links_clean.csv` содержит часть TMDB id, которых нет в `movies.csv`.
+References to PostgreSQL, SQLite, indexes, or partitioning in the presentation
+describe project storage choices or target design. They should not be read as a
+deployment or scalability guarantee.
