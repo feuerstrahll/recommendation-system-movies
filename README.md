@@ -1,10 +1,12 @@
 # 🎬 Movie Recommendation System
 
-A movie recommender built on **TMDB's *Movies Dataset*** and **MovieLens**, exploring content-based, collaborative, and hybrid filtering — with full data-engineering pipelines (PostgreSQL & SQLite) and offline evaluation. Built for the *Recommender Systems & Collaborative Filtering* course.
+A movie recommender built on **TMDB's *Movies Dataset*** and **MovieLens**, comparing content-based, collaborative (LightFM), hybrid, and graph-based (LightGCN) approaches — with a full ETL pipeline, offline evaluation, and a progressive cold-start strategy. Built for the *Recommender Systems & Collaborative Filtering* course.
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/github/license/feuerstrahll/recommendation-system-movies)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/feuerstrahll/recommendation-system-movies)](https://github.com/feuerstrahll/recommendation-system-movies/commits/main)
+[![Last commit](https://img.shields.io/github/last-commit/feuerstrahll/recommendation-system-movies)](https://github.com/feuerstrahll/recommendation-system-movies/commits/feature/dev)
+
+> **Branch note:** this README describes the `feature/dev` branch, which contains substantially more implemented work (LightGCN, the cold-start questionnaire, the recommendation router, and a full model-comparison script) than `main`. See [Branches](#branches) before merging.
 
 ---
 
@@ -14,21 +16,22 @@ A movie recommender built on **TMDB's *Movies Dataset*** and **MovieLens**, expl
 |:---:|:---:|:---:|:---:|
 | **45K+** movies | **270K+** ratings | **671** MovieLens users | **20+** features per movie |
 
-Four recommendation approaches were designed and compared for this project — **content-based**, **collaborative (LightFM)**, **hybrid**, and **graph-based (LightGCN)** — with the collaborative/hybrid LightFM approach selected as the production candidate (ROC AUC **0.7277**, ~1s CPU inference). See [Models Explored & Results](#models-explored--results) below.
+Four recommendation approaches are implemented and compared — **content-based**, **collaborative (LightFM)**, **hybrid (LightFM + item features)**, and **graph-based (LightGCN)** — with a **Unified Recommendation Router** that switches between them as a user moves from a brand-new signup to a data-rich, mature account.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Repository Structure](#repository-structure)
 - [Implementation Status](#implementation-status)
-- [Architecture (as built)](#architecture-as-built)
+- [Architecture](#architecture)
 - [Components](#components)
-- [Models Explored & Results](#models-explored--results)
-- [Cold-Start & Production Strategy](#cold-start--production-strategy)
+- [Models & Results](#models--results)
+- [Cold-Start Strategy](#cold-start-strategy)
 - [Datasets](#datasets)
 - [Final Presentation](#final-presentation)
 - [Team](#team)
 - [Getting Started](#getting-started)
+- [Branches](#branches)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -36,43 +39,52 @@ Four recommendation approaches were designed and compared for this project — *
 
 ## Overview
 
-This repository documents the evolution of a movie recommendation system, from raw data cleaning to a set of evaluated recommenders. It contains three components, each usable on its own:
-
-| Component | What it does | Storage |
-|---|---|---|
-| [`abrikos/`](abrikos) | Cleans the raw TMDB *Movies Dataset* and loads it into PostgreSQL | PostgreSQL |
-| [`models/`](models) | Experiments with collaborative filtering (LightFM, `surprise`), content embeddings (Sentence-Transformers), and FAISS similarity search | CSV / in-memory |
-| [`recommendation-system-lab5/`](recommendation-system-lab5) | End-to-end lab pipeline: ETL, SQLite schema, content-based / collaborative / hybrid recommenders, offline evaluation, demo | SQLite |
-
-The team's final project presentation additionally covers a progressive cold-start strategy, a LightGCN graph model, and a full web application (auth, personal account, live recommendations) — see [Implementation Status](#implementation-status) for what's implemented here versus described as the project's fuller scope.
+Everything lives under [`recommendation-system-lab5/`](recommendation-system-lab5): data cleaning and a PostgreSQL/SQLite schema ([`database/`](recommendation-system-lab5/database)), four recommender implementations ([`models/`](recommendation-system-lab5/models)), offline evaluation across all of them ([`evaluation/`](recommendation-system-lab5/evaluation)), and screenshots of a working demo UI ([`UI_screens/`](recommendation-system-lab5/UI_screens)).
 
 ## Repository Structure
 
 ```text
-recommendation-system-movies/
-├── abrikos/                       # Cleaning + PostgreSQL loading scripts
-│   ├── clean_movies_data.py
-│   ├── load_to_postgres.py
-│   ├── check_db.py
-│   ├── schema.sql
+recommendation-system-movies/  (feature/dev)
+├── movie-recommendation-system.html   # Final project presentation (slide deck)
+├── recommendation-system-lab5/
+│   ├── data/
+│   │   ├── raw/                       # user-supplied source CSVs (not committed)
+│   │   ├── processed/                 # cleaned CSVs (movies, ratings, cast, crew, keywords, links)
+│   │   ├── check.py                   # verifies keyword FK integrity
+│   │   └── dataloader.py              # downloads "The Movies Dataset" from Kaggle
+│   ├── database/
+│   │   ├── clean_movies_data.py       # raw CSV -> cleaned CSVs
+│   │   ├── check_db.py                # verifies PostgreSQL schema + referential integrity
+│   │   ├── schema.sql                 # PostgreSQL schema (movie_id = TMDB id)
+│   │   ├── database_architecture.md
+│   │   ├── er_diagram.mmd
+│   │   ├── recommender.db             # SQLite snapshot for local experiments
+│   │   └── README.md
+│   ├── etl/
+│   │   └── etl_pipeline.py            # MovieLens -> SQLite
+│   ├── models/
+│   │   ├── content_lightFM.py         # content-based: Sentence-Transformer embeddings + LightFM
+│   │   ├── lightfm_model.py           # collaborative: LightFM (WARP loss)
+│   │   ├── lightgcn_model.py          # graph-based: LightGCN (PyTorch Geometric)
+│   │   ├── cold_start_questionnaire.py# onboarding questionnaire + content-based cold start
+│   │   ├── cold_start_examples.py     # usage examples for the questionnaire/router
+│   │   ├── recommendation_router.py   # Unified Recommendation Router (stage-based switching)
+│   │   ├── lightfm_roc_curve.png
+│   │   ├── model_creation.ipynb       # SVD/KNN (surprise) + FAISS exploration
+│   │   └── README.md
+│   ├── evaluation/
+│   │   ├── metrics.py                 # Precision@K, Recall@K, NDCG@K
+│   │   ├── compare_models.py          # evaluates all 4 models side by side
+│   │   ├── lightfm_rmse_solution.py   # RMSE/MAE for LightFM via score normalization
+│   │   └── README.md
+│   ├── UI_screens/                    # 27 screenshots of a working demo UI (no source committed)
+│   ├── LIGHTGCN_QUICKSTART.md
+│   ├── LIGHTGCN_INTEGRATION_CHECKLIST.md
+│   ├── LIGHTGCN_COMPLETE.md
+│   ├── install_lightgcn_deps.bat
+│   ├── lightgcn_examples.py
+│   ├── requirements.txt
 │   └── README.md
-├── models/                        # Model experimentation
-│   ├── model_creation.ipynb       # SVD/KNN (surprise), FAISS similarity search
-│   ├── lightfm_model.py           # Collaborative filtering with LightFM
-│   ├── content_lightFM.py         # Content-based embeddings (Sentence-Transformers) + LightFM
-│   ├── lightfm_roc_curve.png
-│   └── README.md
-├── recommendation-system-lab5/    # Structured, evaluated recommender pipeline
-│   ├── data/                      # raw/ (user-supplied) and processed/ (cleaned CSVs)
-│   ├── database/                  # SQLite schema, ER diagram, database file
-│   ├── etl/                       # ETL pipeline (MovieLens -> SQLite)
-│   ├── recommender/               # content_based.py, collaborative.py, hybrid.py
-│   ├── evaluation/                # Precision@K, Recall@K
-│   ├── report/                    # Lab report
-│   ├── demo.py
-│   └── README.md
-├── docs/
-│   └── presentation.html          # Final project presentation (slide deck)
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── .gitignore
@@ -81,95 +93,83 @@ recommendation-system-movies/
 
 ## Implementation Status
 
-The final presentation covers more ground than this specific repository snapshot — this table is here so the README doesn't overclaim. ✅ means working code exists in this repo; 📝 means it's part of the project's design/final report but isn't (yet) committed here.
+✅ = working code in this branch. 📝 = designed/specified (docstrings, test plans, or the presentation) but not implemented as code. 🖼️ = evidenced by screenshots only, source not committed.
 
-| Component | Description | Status | Location |
-|---|---|---|---|
-| Content-based (TF-IDF) | Genre similarity via TF-IDF + cosine similarity | ✅ Implemented | `recommendation-system-lab5/recommender/content_based.py` |
-| Content-based (embeddings) | Sentence-Transformer title/genre embeddings + LightFM | ✅ Implemented | `models/content_lightFM.py` |
-| Collaborative (cosine) | User-item matrix + cosine similarity | ✅ Implemented | `recommendation-system-lab5/recommender/collaborative.py` |
-| Collaborative (LightFM) | LightFM WARP loss over interactions | ✅ Implemented | `models/lightfm_model.py` |
-| Hybrid (weighted) | Weighted combination of content + collaborative scores | ✅ Implemented | `recommendation-system-lab5/recommender/hybrid.py` |
-| Hybrid (SVD + FAISS) | SVD candidate re-ranking over a FAISS content pool | 📝 Described in presentation | — |
-| LightGCN (GNN) | Graph convolutional model over the user–item bipartite graph | 📝 Described in presentation | — |
-| Unified Recommendation Router | Progressive cold-start → hybrid → collaborative switching | 📝 Described in presentation | — |
-| Cold-start questionnaire | Genre/movie/year preference form for new users | 📝 Described in presentation | — |
-| Web UI (auth, personal account, search) | Full front-end for all recommendation types | 📝 Described in presentation | — |
-| Production backend (FastAPI + Redis) | Serving layer with caching and background retraining | 📝 Described in presentation | — |
-| Offline evaluation (Precision@K, Recall@K) | Metrics module for the lab recommenders | ✅ Implemented | `recommendation-system-lab5/evaluation/metrics.py` |
+| Component | Status | Location |
+|---|---|---|
+| Content-based (TF-IDF) | ✅ | `recommendation-system-lab5/models/model_creation.ipynb` |
+| Content-based (Sentence-Transformer + LightFM) | ✅ | `models/content_lightFM.py` |
+| Collaborative (LightFM, WARP) | ✅ | `models/lightfm_model.py` |
+| Hybrid (LightFM + item features) | ✅ | `models/lightfm_model.py` / `content_lightFM.py` |
+| Graph-based (LightGCN) | ✅ | `models/lightgcn_model.py` |
+| Cold-start questionnaire | ✅ | `models/cold_start_questionnaire.py` |
+| Unified Recommendation Router | ✅ (hybrid/collaborative branches partially stubbed — see file) | `models/recommendation_router.py` |
+| Offline evaluation (Precision/Recall/NDCG@K, all 4 models) | ✅ | `evaluation/compare_models.py` |
+| RMSE/MAE for LightFM | ✅ | `evaluation/lightfm_rmse_solution.py` |
+| Hybrid (SVD + FAISS re-ranking, `alpha` parameter) | 📝 Documented as a design/test plan in `models/README.md` | not implemented |
+| Web UI (auth, personal account, search, all 3 recommendation types) | 🖼️ Screenshots only | `UI_screens/` (27 images, no source) |
+| Production backend (FastAPI + Redis) | 📝 Described in presentation | not implemented |
 
-If the router/LightGCN/UI/backend code lives in another repository, link it here (or add it to this one) and this table can be updated to ✅ across the board.
+The router's `_recommend_hybrid` and `_recommend_collaborative` methods currently have `TODO` fallbacks to content-based recommendations rather than calling the LightFM/LightGCN models directly — see [`models/recommendation_router.py`](recommendation-system-lab5/models/recommendation_router.py) if you pick this up.
 
-## Architecture (as built)
-
-The three in-repo components map onto the standard recommender-system pipeline: ingest raw data, store it, model it, evaluate the output.
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[("TMDB Movies Dataset<br/>+ MovieLens ratings")] --> B1["abrikos ETL<br/>clean_movies_data.py"]
-    A --> B2["lab5 ETL<br/>etl_pipeline.py"]
+    A[("TMDB Movies Dataset<br/>+ MovieLens ratings")] --> B["database/clean_movies_data.py"]
+    B --> C1[("PostgreSQL<br/>schema.sql")]
+    B --> C2[("SQLite<br/>recommender.db")]
 
-    B1 --> C1[("PostgreSQL<br/>movies_db")]
-    B2 --> C2[("SQLite<br/>recommender.db")]
+    C2 --> D1["Content-based<br/>Sentence-Transformer + LightFM"]
+    C2 --> D2["Collaborative<br/>LightFM (WARP)"]
+    C2 --> D3["Graph-based<br/>LightGCN"]
 
-    C1 --> D1["models/<br/>LightFM · FAISS · surprise (SVD/KNN)"]
-    C2 --> D2["Content-based<br/>(TF-IDF similarity)"]
-    C2 --> D3["Collaborative<br/>(user-item cosine similarity)"]
+    D1 --> E["Unified Recommendation Router"]
+    D2 --> E
+    D3 --> E
 
-    D2 --> D4["Hybrid recommender"]
-    D3 --> D4
-
-    D1 --> E["Recommendations"]
-    D4 --> F["Evaluation<br/>Precision@K · Recall@K · ROC-AUC"]
+    E --> F["evaluation/compare_models.py<br/>Precision@K · Recall@K · NDCG@K · RMSE"]
 ```
 
 ## Components
 
-### 1. `abrikos/` — Data Cleaning & PostgreSQL ETL
+### Database & ETL — `recommendation-system-lab5/database/`
 
-Cleans the raw *Movies Dataset* CSVs (metadata, credits, keywords, ratings, links) and loads the normalized result into PostgreSQL, using the schema in [`abrikos/schema.sql`](abrikos/schema.sql).
-
-```bash
-cd abrikos
-pip install -r requirements.txt
-python clean_movies_data.py --input ./data_Movies --output ./cleaned_data
-python load_to_postgres.py --host localhost --port 5432 \
-    --db movies_db --user postgres --password secret \
-    --data ./cleaned_data --schema ./schema.sql
-python check_db.py --db movies_db --user postgres --password secret
-```
-
-See [`abrikos/README.md`](abrikos/README.md).
-
-### 2. `models/` — Model Experiments
-
-Notebook and scripts comparing LightFM collaborative filtering, Sentence-Transformer content embeddings, and FAISS similarity search.
+Cleans the raw *Movies Dataset* CSVs and produces both a PostgreSQL schema and a SQLite snapshot, keyed on `movie_id` (TMDB id), with `movielens_id` preserved as a reference column on `ratings`.
 
 ```bash
-cd models
-pip install -r requirements.txt
-python lightfm_model.py
-```
-
-See [`models/README.md`](models/README.md) for pipeline logs and metrics from past runs.
-
-### 3. `recommendation-system-lab5/` — Structured Recommender Lab
-
-A SQLite-backed pipeline with content-based, collaborative, and hybrid recommenders plus offline evaluation.
-
-```powershell
 cd recommendation-system-lab5
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python demo.py
+python database/clean_movies_data.py --input data/raw --output data/processed
+psql -U postgres -d movies_db -f database/schema.sql
+python database/check_db.py --db movies_db --user postgres --password secret
 ```
 
-See [`recommendation-system-lab5/README.md`](recommendation-system-lab5/README.md) and the [lab report](recommendation-system-lab5/report/lab5_report.md).
+See [`database/README.md`](recommendation-system-lab5/database/README.md).
 
-## Models Explored & Results
+### Models — `recommendation-system-lab5/models/`
 
-Comparison criteria and results as evaluated for the final project (see [Implementation Status](#implementation-status) for what has corresponding code in this repo):
+```bash
+cd recommendation-system-lab5
+pip install -r requirements.txt
+
+python models/cold_start_questionnaire.py   # new-user onboarding
+python models/recommendation_router.py      # demo: stage-based strategy switching
+python models/lightfm_model.py              # collaborative filtering
+python models/content_lightFM.py            # content-based
+python models/lightgcn_model.py             # graph-based (needs torch + torch-geometric)
+```
+
+See [`models/README.md`](recommendation-system-lab5/models/README.md).
+
+### Evaluation — `recommendation-system-lab5/evaluation/`
+
+```bash
+python evaluation/compare_models.py --models all --eval-users 300
+```
+
+Runs Precision@K / Recall@K / NDCG@K for all four models plus RMSE/MAE for the LightFM variants, and prints a production-suitability table. See [`evaluation/README.md`](recommendation-system-lab5/evaluation/README.md).
+
+## Models & Results
 
 | Criterion | Content-Based | LightFM (Collab) | Hybrid | LightGCN (GNN) |
 |---|---|---|---|---|
@@ -178,11 +178,10 @@ Comparison criteria and results as evaluated for the final project (see [Impleme
 | Training speed | Seconds | ~30s | Minutes | 1–3 min (CPU) |
 | Inference speed | <0.1s | ~1s | ~0.5s | 1–3s |
 | Scalability | FAISS | Good | Medium | Needs GPU |
-| Real-time updates | Yes | Requires retraining | Partial | Requires retraining |
 | Explainability | High | Medium | Medium | Low |
 | **Chosen for production** | Cold start | ✓ Primary | ✓ Warm start | Experimental |
 
-**LightFM (collaborative)** — ROC AUC **0.7277** (500-user sample), ~30s training, ~1s CPU inference. See [`models/README.md`](models/README.md) for full run logs.
+**LightFM (collaborative)** — ROC AUC **0.7277** (500-user sample), ~30s training, ~1s CPU inference.
 
 **LightGCN (GNN)** — evaluated at 610 users, CPU, 20 epochs:
 
@@ -192,31 +191,43 @@ Comparison criteria and results as evaluated for the final project (see [Impleme
 | Recall@K | 0.0652 | 0.0823 |
 | NDCG@K | 0.0421 | 0.0527 |
 
-> LightGCN was evaluated as part of the final project comparison but its implementation isn't included in this repository — see [Implementation Status](#implementation-status).
+Run `evaluation/compare_models.py` to reproduce a full side-by-side table (including RMSE/MAE for the LightFM variants) on your own data split. **Production choice:** LightFM was selected over LightGCN — comparable quality, CPU-only inference at ~1s, simpler retraining, and cold-start support via side features, versus LightGCN's GPU dependency and lower explainability.
 
-**Production choice:** LightFM (collaborative/hybrid) was selected over LightGCN — comparable quality, CPU-only inference at ~1s, simpler retraining, and better cold-start support via side features, versus LightGCN's GPU dependency and lower explainability.
+## Cold-Start Strategy
 
-## Cold-Start & Production Strategy
-
-The final presentation describes a **Unified Recommendation Router** that progressively switches strategy as a user accumulates ratings:
+`recommendation_router.py` implements a 4-stage lifecycle:
 
 | Stage | Ratings | Strategy |
 |---|---|---|
-| 1. New user | 0 | Onboarding questionnaire (genres, favorite movies, release-year preference) |
-| 2. Cold start | 1–5 | Content-based (metadata similarity) |
-| 3. Warm start | 5–15 | Hybrid: `hybrid_score = α·svd_score_norm + (1−α)·content_score_norm` |
-| 4. Mature | 15+ | Collaborative (LightFM) |
+| New user | 0 | Onboarding questionnaire (`cold_start_questionnaire.py`) → content-based |
+| Cold start | 1–5 | Content-based (metadata similarity) |
+| Warm start | 5–20 | Hybrid (content + collaborative) |
+| Mature | 20+ | Collaborative (LightFM / LightGCN) |
 
-Planned production architecture: **FastAPI + Gunicorn** for serving, **Redis** for caching user embeddings, **FAISS** for nearest-neighbor search, background batch retraining, and `ratings` partitioned by `user_id`. As noted above, the router, questionnaire, and serving layer are part of the project's design rather than code currently in this repository.
+```python
+from recommendation_router import UnifiedRecommendationRouter
+
+router = UnifiedRecommendationRouter(movies, ratings)
+router.register_new_user(user_id=42)
+result = router.get_recommendations(user_id=42, n_recommendations=10)
+# result.strategy   -> "content-based" / "hybrid" / "collaborative"
+# result.user_stage -> UserStage.NEW / COLD_START / WARM_START / MATURE
+```
+
+As noted in [Implementation Status](#implementation-status), the hybrid and collaborative branches of the router currently fall back to content-based recommendations (marked `TODO` in the source) rather than calling LightFM/LightGCN directly.
 
 ## Datasets
 
-- **[The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset)** (TMDB metadata, credits, keywords) — 45K+ movies, 20+ features each. Used by `abrikos/` and `models/`.
-- **[MovieLens](https://grouplens.org/datasets/movielens/)** (user ratings) — 671 users, 270K+ ratings. Used by all three components.
+- **[The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset)** (TMDB metadata, credits, keywords) — 45K+ movies, 20+ features each.
+- **[MovieLens](https://grouplens.org/datasets/movielens/)** (user ratings) — 671 users, 270K+ ratings.
 
-Raw source files are **not** committed (see `data/raw/.gitkeep` in the lab folder) — download them from the links above. Cleaned/processed CSVs used by the lab pipeline are committed under `recommendation-system-lab5/data/processed/`.
+Raw source files aren't committed — `data/dataloader.py` downloads them from Kaggle via `kagglehub` and places them in `data/raw/`. Cleaned CSVs are committed under `data/processed/`.
 
-> **Note:** `recommendation-system-lab5/database/recommender.db` (~41 MB) and the processed CSVs (~25 MB combined) are currently committed. Consider regenerating them locally via the ETL scripts instead of committing binary/data artifacts going forward, or track them with [Git LFS](https://git-lfs.com/).
+> **Note:** `database/recommender.db` (~41 MB) and the processed CSVs are committed directly. Consider [Git LFS](https://git-lfs.com/) or regenerating them via the ETL scripts instead, going forward.
+
+## Final Presentation
+
+The full project presentation — architecture, all four models, metrics, and a UI walkthrough — is at [`movie-recommendation-system.html`](movie-recommendation-system.html). Open it in a browser (arrow keys or on-screen buttons to navigate); the UI screenshots now load correctly from `recommendation-system-lab5/UI_screens/`.
 
 ## Team
 
@@ -229,20 +240,36 @@ Raw source files are **not** committed (see `data/raw/.gitkeep` in the lab folde
 
 ## Getting Started
 
-Each component is self-contained with its own `requirements.txt`. Clone the repo, then `cd` into the component you want to run (Python 3.10+ recommended).
+```bash
+git clone --branch feature/dev https://github.com/feuerstrahll/recommendation-system-movies.git
+cd recommendation-system-movies/recommendation-system-lab5
+pip install -r requirements.txt
+python models/recommendation_router.py
+```
+
+Python 3.10+ recommended. `lightgcn_model.py` additionally needs `torch` and `torch-geometric` (see [`LIGHTGCN_QUICKSTART.md`](recommendation-system-lab5/LIGHTGCN_QUICKSTART.md) or run `install_lightgcn_deps.bat` on Windows).
+
+## Branches
+
+- **`main`** — an earlier, simpler snapshot: separate `abrikos/` (PostgreSQL ETL) and top-level `models/` folders, no LightGCN, no router, no cold-start questionnaire.
+- **`feature/dev`** (this README) — the consolidated, more complete version: everything under `recommendation-system-lab5/`, plus LightGCN, the cold-start questionnaire, the recommendation router, and the full model-comparison script.
+
+If `feature/dev` is the direction you want to keep, merging it into `main` (and retiring the older `abrikos/`-based structure) would avoid maintaining two diverging layouts:
 
 ```bash
-git clone https://github.com/feuerstrahll/recommendation-system-movies.git
-cd recommendation-system-movies
+git checkout main
+git merge feature/dev
 ```
+
+Expect conflicts around `models/README.md`, `requirements.txt`, and the top-level `README.md`/`abrikos/` vs `database/` split — these will need a manual decision on which structure to keep.
 
 ## Roadmap
 
-- [ ] Implement the Unified Recommendation Router and progressive cold-start strategy described in the presentation.
-- [ ] Add the LightGCN model and the SVD+FAISS hybrid re-ranker.
-- [ ] Build the web UI (auth, personal account, search) and a FastAPI serving layer.
-- [ ] Fill in `recommendation-system-lab5/report/lab5_report.md` with final dataset stats and results.
-- [ ] Add automated tests for `recommender/` and `evaluation/` modules.
+- [ ] Implement the LightFM/LightGCN calls in `recommendation_router.py`'s hybrid and collaborative branches (currently `TODO` fallbacks).
+- [ ] Implement the SVD + FAISS hybrid re-ranker described in `models/README.md`'s design/test-plan section.
+- [ ] Commit the source for the demo UI shown in `UI_screens/` (or note where it lives, if it's a separate project).
+- [ ] Decide on `main` vs `feature/dev` as the canonical branch and merge.
+- [ ] Add automated tests for `models/` and `evaluation/`.
 
 ## Contributing
 
@@ -256,4 +283,4 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 
 - [The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset) by Rounak Banik
 - [MovieLens](https://grouplens.org/datasets/movielens/) by GroupLens Research
-- [LightFM](https://github.com/lyst/lightfm), [FAISS](https://github.com/facebookresearch/faiss), [scikit-surprise](http://surpriselib.com/), [Sentence-Transformers](https://www.sbert.net/)
+- [LightFM](https://github.com/lyst/lightfm), [LightGCN](https://arxiv.org/abs/2002.02126) / [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/), [Sentence-Transformers](https://www.sbert.net/), [FAISS](https://github.com/facebookresearch/faiss)
