@@ -180,6 +180,37 @@ class LightGCN(nn.Module):
 # 3. ОБУЧЕНИЕ (BPR Loss + Negative Sampling)
 # ==========================================================
 
+def _sample_negatives_vectorized(pos_idx_sets, n_items, rng):
+    """
+    Vectorized rejection sampling for BPR negatives: draw all candidates in
+    one batched rng.randint call, then resample only the (usually rare)
+    collisions instead of looping per example. With per-positive-interaction
+    sampling (see train_lightgcn), this list can be ~6M examples/epoch — a
+    plain Python "while True: draw one, check one" loop over that many
+    examples is the same O(n) work as the vectorized version, but with a
+    per-call Python/numpy-scalar-API overhead that inflates its constant
+    factor by orders of magnitude, making it a CPU-side bottleneck that
+    fully offsets any GPU-side speedup (e.g. the cached adjacency matrix).
+    Collision probability is ~len(pos_idx_set)/n_items per example — at
+    this project's scale (~46 positives/user, ~26K items) that's ~0.17%,
+    so the first vectorized draw resolves ~99.8% of examples and the loop
+    below only ever touches the small collision remainder.
+    """
+    n = len(pos_idx_sets)
+    negs = rng.randint(0, n_items, size=n)
+
+    collision_mask = np.fromiter(
+        (negs[i] in pos_idx_sets[i] for i in range(n)), dtype=bool, count=n
+    )
+    while collision_mask.any():
+        idx = np.where(collision_mask)[0]
+        negs[idx] = rng.randint(0, n_items, size=len(idx))
+        collision_mask[idx] = np.fromiter(
+            (negs[i] in pos_idx_sets[i] for i in idx), dtype=bool, count=len(idx)
+        )
+    return negs
+
+
 def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
                    user_map, item_map,
                    lr=0.001, epochs=20, batch_size=1024, neg_samples=1, seed=42):
@@ -243,14 +274,11 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
             pos_idx_set_per_example.append(all_pos_idx_sets[i])
 
     for epoch in range(epochs):
-        neg_idx_list = []
-        for _ in range(neg_samples):
-            for pos_idx_set in pos_idx_set_per_example:
-                while True:
-                    candidate = rng.randint(0, n_items)
-                    if candidate not in pos_idx_set:
-                        neg_idx_list.append(candidate)
-                        break
+        neg_idx_arrays = [
+            _sample_negatives_vectorized(pos_idx_set_per_example, n_items, rng)
+            for _ in range(neg_samples)
+        ]
+        neg_idx_list = np.concatenate(neg_idx_arrays).tolist()
 
         u_idx = torch.tensor(u_idx_list * neg_samples, device=device)
         pos_idx = torch.tensor(pos_idx_list * neg_samples, device=device)
