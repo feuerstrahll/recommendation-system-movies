@@ -175,6 +175,15 @@ collaborative filtering comparisons) are in [UI_screens/](UI_screens/).
 - Hyperparameter tuning pass for LightGCN and LightFM Hybrid beyond the
   current fixed configuration
 
+## Data sources
+
+- [MovieLens](https://grouplens.org/datasets/movielens/)
+- [The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset)
+
+Review the terms and licensing of the code, datasets, and third-party
+dependencies before redistribution or deployment. This documentation package
+does not introduce a software license.
+
 ## License
 
 [MIT](LICENSE)
