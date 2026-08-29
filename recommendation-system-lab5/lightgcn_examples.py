@@ -12,8 +12,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-# Добавляем путь к recommender модулям
-sys.path.insert(0, str(Path(__file__).parent / "recommender"))
+# Добавляем путь к models модулям
+sys.path.insert(0, str(Path(__file__).parent / "models"))
 
 def example_lightgcn_basic():
     """Пример 1: базовый запуск LightGCN"""

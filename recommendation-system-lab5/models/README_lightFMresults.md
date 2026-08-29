@@ -1,12 +1,17 @@
-# В файле model_creation cначала идет код создания SVD
-## Потом показан как работает faiss
+# LightFM Run Log
 
-### Первая итерация пайплайна
-**Лог выполнения:** `Running LightFM recommendation pipeline...`
+Raw output from `model_creation.ipynb` (SVD exploration, then FAISS) and
+from running `lightfm_model.py` directly. Kept as a record of what the
+model actually produced, not a benchmark to compare against.
 
+## First pipeline run
 
-| Название фильма (Title) | Оценка LightFM (Score) |
-| :--- | :--- |
+Log: `Running LightFM recommendation pipeline...`
+
+Top-10 by LightFM score:
+
+| Title | LightFM Score |
+|---|---|
 | The Dark Backward | 2.144949e+11 |
 | The Canyon | 8.656903e+10 |
 | Why We Fight: The Nazis Strike | 5.612668e+10 |
@@ -18,19 +23,17 @@
 | Bluebeard | 2.259910e+10 |
 | Bag It | 1.964603e+10 |
 
-**Статус:** `done`
+Status: `done`
 
----
+## Second pipeline run
 
-### Вторая итерация пайплайна
-**Команда запуска:** `(venv) den@Win11-PC:/mnt/d/recommendation-system-movies-main/models$ python lightfm_model.py`  
-**Лог выполнения:** `Running LightFM recommendation pipeline...`
+Command: `python lightfm_model.py`
+Log: `Running LightFM recommendation pipeline...`
 
-#### Топ-10 Рекомендаций (Набор А)
+Top-10 (set A):
 
-
-| Название фильма (Title) | Оценка LightFM (Score) |
-| :--- | :--- |
+| Title | LightFM Score |
+|---|---|
 | Sublime | 6.467534e+11 |
 | The Presence | 3.834368e+10 |
 | The Far Country | 2.845057e+09 |
@@ -42,11 +45,10 @@
 | 100 Rifles | 1.686234e+08 |
 | Cry, the Beloved Country | 1.453672e+08 |
 
-#### Топ-10 Рекомендаций (Набор Б)
+Top-10 (set B):
 
-
-| Название фильма (Title) | Оценка LightFM (Score) |
-| :--- | :--- |
+| Title | LightFM Score |
+|---|---|
 | The Decline of Western Civilization Part II: The Metal Years | 1.859880e+08 |
 | See Spot Run | 4.798546e+06 |
 | Bodies, Rest & Motion | 2.289886e+06 |
@@ -57,8 +59,16 @@
 | Nothing Personal | 9.867862e+05 |
 | W.R. - Mysteries of the Organism | 9.846798e+05 |
 | Tuvalu | 5.415688e+05 |
-#### Metrtics
 
+### Metrics
+
+```text
 --- LightFM Native Metrics ---
 ROC AUC Score (Sampled 500 Users): 0.7277
 done
+```
+
+Note: raw LightFM scores are not probabilities or ratings — they are
+unnormalized dot-product logits, which is why magnitudes vary by orders of
+magnitude between runs. Ranking (top-N order) is what matters, not the
+absolute score value.

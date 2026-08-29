@@ -1,36 +1,31 @@
 # Database
 
-Папка содержит актуальные файлы для подготовки и проверки базы данных рекомендательной системы.
+Tooling to build and validate the recommendation system's database.
 
-## Файлы
+## Files
 
-- `clean_movies_data.py` - очистка The Movies Dataset и сборка финальных CSV.
-- `schema.sql` - актуальная PostgreSQL-схема.
-- `check_db.py` - проверка структуры таблиц и ссылочной целостности в PostgreSQL.
-- `database_architecture.md` - описание таблиц и связей.
-- `er_diagram.mmd` - Mermaid ER-диаграмма.
-- `recommender.db` - SQLite-снимок для локальных экспериментов.
+- `clean_movies_data.py` — cleans The Movies Dataset and builds the final CSVs.
+- `schema.sql` — PostgreSQL schema matching those CSVs.
+- `check_db.py` — validates table structure and referential integrity in PostgreSQL.
+- `database_architecture.md` — table and relationship reference.
+- `er_diagram.mmd` — Mermaid ER diagram.
+- `recommender.db` — SQLite snapshot for local experiments (also the target of `etl/etl_pipeline.py`).
 
-## Очистка данных
+## Cleaning the data
 
-Из папки `lab-5/recommendation-system-lab5`:
+From `recommendation-system-lab5/`:
 
 ```powershell
 python database/clean_movies_data.py
 ```
 
-По умолчанию:
-
-- input: `data/raw`
-- output: `data/processed`
-
-Явный запуск:
+Defaults: reads from `data/raw`, writes to `data/processed`. Paths can be overridden:
 
 ```powershell
 python database/clean_movies_data.py --input data/raw --output data/processed
 ```
 
-Скрипт ожидает исходные файлы:
+Expected source files:
 
 - `movies_metadata.csv`
 - `credits.csv`
@@ -38,36 +33,38 @@ python database/clean_movies_data.py --input data/raw --output data/processed
 - `ratings.csv`
 - `links.csv`
 
-## Выходные CSV
+## Output CSVs
 
-- `movies.csv` - финальная таблица фильмов, ключ `movie_id` равен TMDB id.
-- `ratings.csv` - финальные оценки, `movie_id` уже приведен к TMDB id.
+- `movies.csv` — final movie table, keyed by `movie_id` (TMDB id).
+- `ratings.csv` — final ratings, `movie_id` already mapped to TMDB id.
 - `movies_clean.csv`, `ratings_clean.csv`, `links_clean.csv`
 - `keywords_clean.csv`, `cast_clean.csv`, `crew_clean.csv`
 
-`movielens_id` в `ratings.csv` сохранен как исходный MovieLens id, но основной ключ для рекомендаций - `movie_id`.
+`ratings.csv` also keeps `movielens_id` (the original MovieLens id) for
+traceability, but `movie_id` is the key every model uses.
 
 ## PostgreSQL
 
-Применение схемы:
+Apply the schema:
 
 ```powershell
 psql -U postgres -d movies_db -f database/schema.sql
 ```
 
-Проверка БД:
+Validate:
 
 ```powershell
 python database/check_db.py --db movies_db --user postgres --password secret
 ```
 
-`check_db.py` проверяет:
+`check_db.py` checks:
 
-- наличие ожидаемых таблиц и колонок;
+- expected tables and columns exist;
 - `ratings.movie_id -> movies.movie_id`;
 - `movie_keywords.movie_id -> movies.movie_id`;
 - `movie_keywords.keyword_id -> keywords.keyword_id`;
 - `cast_members.movie_id -> movies.movie_id`;
 - `crew_members.movie_id -> movies.movie_id`.
 
-Важно: `links.tmdb_id` не имеет FK на `movies.movie_id`, потому что `links_clean.csv` содержит часть TMDB id, которых нет в `movies.csv`.
+Note: `links.tmdb_id` has no FK to `movies.movie_id`, because
+`links_clean.csv` contains TMDB ids that are not present in `movies.csv`.

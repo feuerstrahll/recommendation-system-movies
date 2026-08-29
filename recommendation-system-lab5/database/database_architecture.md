@@ -1,10 +1,11 @@
 # Database Architecture
 
-Документ описывает актуальную PostgreSQL-схему из `schema.sql` и processed CSV, которые создает `clean_movies_data.py`.
+Describes the PostgreSQL schema in `schema.sql` and the processed CSVs
+produced by `clean_movies_data.py`.
 
-## Источник данных
+## Source data
 
-Используется The Movies Dataset:
+The Movies Dataset:
 
 - `movies_metadata.csv`
 - `credits.csv`
@@ -12,137 +13,130 @@
 - `ratings.csv`
 - `links.csv`
 
-После очистки данные сохраняются в `data/processed`.
+Cleaned output is written to `data/processed`.
 
-## Главный принцип идентификаторов
+## Identifier convention
 
-В актуальной версии проекта все рекомендательные части используют единый ключ фильма:
+Every recommendation component keys movies by the TMDB id:
 
 ```text
 movie_id = TMDB id
 ```
 
-`ratings.csv` дополнительно хранит:
+`ratings.csv` additionally keeps:
 
 ```text
-movielens_id = исходный MovieLens movieId
+movielens_id = original MovieLens movieId
 ```
 
-`movielens_id` нужен для трассировки к исходному MovieLens/links, но не является основным ключом рекомендаций.
+`movielens_id` exists only to trace back to the original MovieLens/links
+data; it is not used as a join key by the models.
 
-## Таблицы
+## Tables
 
 ### movies
 
-Главная таблица фильмов.
+Main movie table.
 
-Ключевые поля:
-
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `movie_id` | INTEGER, PK | TMDB id фильма |
+| `movie_id` | INTEGER, PK | TMDB id |
 | `imdb_id` | VARCHAR | IMDB id |
-| `title` | TEXT | Название |
-| `original_title` | TEXT | Оригинальное название |
-| `original_language` | VARCHAR | Язык оригинала |
-| `overview` | TEXT | Описание |
-| `release_date` | DATE | Дата выхода |
-| `release_year` | SMALLINT | Год выхода |
-| `budget` | NUMERIC | Бюджет |
-| `revenue` | NUMERIC | Сборы |
-| `runtime` | NUMERIC | Длительность |
-| `vote_average` | NUMERIC | Средняя оценка |
-| `vote_count` | NUMERIC | Количество голосов |
-| `popularity` | NUMERIC | Популярность |
-| `genre_names` | TEXT | Строка Python-list с жанрами |
-| `production_company_names` | TEXT | Строка Python-list с компаниями |
-| `production_country_codes` | TEXT | Строка Python-list со странами |
-| `spoken_language_codes` | TEXT | Строка Python-list с языками |
+| `title` | TEXT | Title |
+| `original_title` | TEXT | Original-language title |
+| `original_language` | VARCHAR | Original language |
+| `overview` | TEXT | Synopsis |
+| `release_date` | DATE | Release date |
+| `release_year` | SMALLINT | Release year |
+| `budget` | NUMERIC | Budget |
+| `revenue` | NUMERIC | Revenue |
+| `runtime` | NUMERIC | Runtime |
+| `vote_average` | NUMERIC | Average vote |
+| `vote_count` | NUMERIC | Vote count |
+| `popularity` | NUMERIC | Popularity score |
+| `genre_names` | TEXT | Python-list string of genres |
+| `production_company_names` | TEXT | Python-list string of companies |
+| `production_country_codes` | TEXT | Python-list string of countries |
+| `spoken_language_codes` | TEXT | Python-list string of languages |
 
-Поля со списками оставлены как `TEXT`, потому что текущий CSV хранит значения в виде строк `['Drama', 'Comedy']`, а не PostgreSQL-массивов.
+List-like fields stay `TEXT` because the source CSV stores them as Python
+list literals (e.g. `['Drama', 'Comedy']`), not native PostgreSQL arrays.
 
 ### ratings
 
-Финальные пользовательские оценки.
+Final user ratings.
 
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `user_id` | INTEGER | Пользователь |
-| `movie_id` | INTEGER, FK | TMDB id фильма |
-| `movielens_id` | INTEGER | Исходный MovieLens id |
-| `rating` | NUMERIC | Оценка от 0.5 до 5.0 |
-| `timestamp` | TIMESTAMP | Время оценки |
+| `user_id` | INTEGER | User |
+| `movie_id` | INTEGER, FK | TMDB id |
+| `movielens_id` | INTEGER | Original MovieLens id |
+| `rating` | NUMERIC | Rating, 0.5–5.0 |
+| `timestamp` | TIMESTAMP | Rating time |
 
-Первичный ключ: `(user_id, movie_id)`.
+Primary key: `(user_id, movie_id)`.
 
 ### links
 
-Связь между MovieLens, IMDB и TMDB.
+Maps MovieLens, IMDB, and TMDB ids.
 
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
 | `movielens_id` | INTEGER, PK | MovieLens id |
-| `imdb_id` | INTEGER | IMDB id без префикса `tt` |
+| `imdb_id` | INTEGER | IMDB id, without the `tt` prefix |
 | `tmdb_id` | INTEGER | TMDB id |
 
-`tmdb_id` не имеет FK на `movies.movie_id`, потому что в `links_clean.csv` есть id, отсутствующие в `movies.csv`.
+`tmdb_id` has no FK to `movies.movie_id`: `links_clean.csv` contains ids
+that are absent from `movies.csv`.
 
 ### cast_members
 
-Актеры и роли.
-
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `movie_id` | INTEGER, FK | TMDB id фильма |
-| `cast_id` | INTEGER | id записи cast |
-| `person_id` | INTEGER | TMDB id персоны |
-| `name` | TEXT | Имя |
-| `character` | TEXT | Роль |
-| `order` | INTEGER | Порядок в cast |
-| `gender` | SMALLINT | Код пола из датасета |
-| `profile_path` | TEXT | Путь к профилю |
+| `movie_id` | INTEGER, FK | TMDB id |
+| `cast_id` | INTEGER | Cast entry id |
+| `person_id` | INTEGER | TMDB person id |
+| `name` | TEXT | Actor name |
+| `character` | TEXT | Role |
+| `order` | INTEGER | Billing order |
+| `gender` | SMALLINT | Gender code from the source dataset |
+| `profile_path` | TEXT | Profile image path |
 
-Первичный ключ: `(movie_id, cast_id, person_id, "order")`.
+Primary key: `(movie_id, cast_id, person_id, "order")`.
 
 ### crew_members
 
-Съемочная группа.
-
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `movie_id` | INTEGER, FK | TMDB id фильма |
-| `person_id` | INTEGER | TMDB id персоны |
-| `name` | TEXT | Имя |
-| `department` | VARCHAR | Департамент |
-| `job` | VARCHAR | Должность |
-| `gender` | SMALLINT | Код пола из датасета |
-| `profile_path` | TEXT | Путь к профилю |
+| `movie_id` | INTEGER, FK | TMDB id |
+| `person_id` | INTEGER | TMDB person id |
+| `name` | TEXT | Crew member name |
+| `department` | VARCHAR | Department |
+| `job` | VARCHAR | Job title |
+| `gender` | SMALLINT | Gender code from the source dataset |
+| `profile_path` | TEXT | Profile image path |
 
-Первичный ключ: `(movie_id, person_id, department, job)`.
+Primary key: `(movie_id, person_id, department, job)`.
 
 ### keywords
 
-Справочник ключевых слов.
-
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `keyword_id` | INTEGER, PK | id ключевого слова |
-| `name` | TEXT | Текст ключевого слова |
+| `keyword_id` | INTEGER, PK | Keyword id |
+| `name` | TEXT | Keyword text |
 
 ### movie_keywords
 
-Связь фильмов и ключевых слов.
-
-| Поле | Тип | Назначение |
+| Field | Type | Purpose |
 |---|---|---|
-| `movie_id` | INTEGER, FK | TMDB id фильма |
-| `keyword_id` | INTEGER, FK | id ключевого слова |
+| `movie_id` | INTEGER, FK | TMDB id |
+| `keyword_id` | INTEGER, FK | Keyword id |
 
-Первичный ключ: `(movie_id, keyword_id)`.
+Primary key: `(movie_id, keyword_id)`.
 
-## Проверки
+## Checks
 
-`check_db.py` проверяет структуру таблиц и ключевые связи:
+`check_db.py` validates table structure and these relations:
 
 - `ratings.movie_id -> movies.movie_id`;
 - `movie_keywords.movie_id -> movies.movie_id`;
@@ -150,16 +144,10 @@ movielens_id = исходный MovieLens movieId
 - `cast_members.movie_id -> movies.movie_id`;
 - `crew_members.movie_id -> movies.movie_id`.
 
-CSV-проверка для `movie_keywords` находится в `data/check.py`.
+A CSV-level check for `movie_keywords` is in `data/check.py`.
 
-## Использование в рекомендациях
+## Use in recommendation models
 
-Content-based и cold-start используют `movies`, жанры, описания, популярность и оценки.
-
-Collaborative/SVD использует `ratings` с колонками:
-
-```python
-["user_id", "movie_id", "rating"]
-```
-
-Hybrid объединяет content-based score и SVD score по `movie_id`.
+Content-based and cold-start models use `movies`: genres, overview,
+popularity, and vote data. Collaborative models (LightFM, LightGCN) use
+`ratings` with columns `["user_id", "movie_id", "rating"]`.

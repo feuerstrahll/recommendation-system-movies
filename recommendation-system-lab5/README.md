@@ -1,72 +1,90 @@
 # Movie Recommendation System
-подготовка датасета фильмов, схема базы данных и несколько подходов к рекомендациям.
 
-## Структура
+Movie dataset preparation, a PostgreSQL/SQLite schema, and four recommendation
+approaches (content-based, two LightFM variants, LightGCN) built on
+[The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset).
 
-- `data/raw/` - исходные CSV из The Movies Dataset.
-- `data/processed/` - актуальные очищенные данные.
-- `database/` - `clean_movies_data.py`, `schema.sql`, `check_db.py`, ER-диаграмма и SQLite-снимок.
-- `recommender/` - cold-start и hybrid recommender.
-- `evaluation/` - метрики.
+This branch (`feature/dev`) holds active development: model implementations,
+database tooling, evaluation, and UI exploration. The `main` branch holds an
+earlier baseline (SVD + FAISS hybrid recommender) and is kept as-is.
 
-## Актуальный контракт данных
+## Structure
 
-Основной ключ фильмов в проекте:
+```
+data/           check.py, dataloader.py — local data utilities (raw/processed CSVs are not committed)
+database/       schema, cleaning script, integrity checks, ER diagram — see database/README.MD
+etl/            etl_pipeline.py — loads processed CSVs into database/recommender.db (SQLite)
+models/         4 recommendation models + cold-start questionnaire + router — see models/README.md
+evaluation/     shared metrics (Precision@K, Recall@K, NDCG@K) + evaluation/compare_models.py
+UI_screens/     screenshots of the Streamlit app (auth, search, cold start, collaborative, hybrid)
+docs/demo/      exported standalone HTML builds of the UI
+```
+
+## Data contract
+
+Movie identity across the whole project is the TMDB id:
 
 ```text
-movies.movie_id = TMDB id
+movies.movie_id  = TMDB id
 ratings.movie_id = TMDB id
-ratings.movielens_id = исходный MovieLens id
+ratings.movielens_id = original MovieLens movieId (kept for traceability only)
 ```
 
-Основные processed-файлы:
+See [database/database_architecture.md](database/database_architecture.md) for the full table layout.
 
-- `movies.csv`
-- `ratings.csv`
-- `movies_clean.csv`
-- `ratings_clean.csv`
-- `links_clean.csv`
-- `keywords_clean.csv`
-- `cast_clean.csv`
-- `crew_clean.csv`
-
-## Подготовка данных
+## Setup
 
 ```powershell
-python database/clean_movies_data.py
+pip install -r requirements.txt
 ```
 
-По умолчанию скрипт читает `data/raw` и пишет `data/processed`.
+`requirements.txt` covers the classic stack (pandas, scikit-learn, LightFM,
+Streamlit) plus PyTorch + PyTorch Geometric for LightGCN.
 
-Можно явно указать пути:
+## Data preparation
 
 ```powershell
 python database/clean_movies_data.py --input data/raw --output data/processed
 ```
 
-## Проверка данных
+Reads the raw Movies Dataset CSVs (`movies_metadata.csv`, `credits.csv`,
+`keywords.csv`, `ratings.csv`, `links.csv`) and writes the cleaned,
+TMDB-keyed CSVs consumed by every model and by the SQL schema.
 
-Проверка внешних ключей `movie_keywords` на CSV:
+## Models
+
+Four approaches live in `models/`, meant to be compared rather than picked
+as a single "winner":
+
+| Model | File | Approach |
+|---|---|---|
+| Content-Based | `models/content_lightFM.py` | TF-IDF / SentenceTransformer embeddings over title + genres |
+| LightFM (collaborative) | `models/lightfm_model.py` | Factorization machines, interaction data only |
+| LightFM (hybrid) | `models/content_lightFM.py` | WARP loss + content item features |
+| LightGCN | `models/lightgcn_model.py` | Graph convolution over the user-item bipartite graph, BPR loss |
+
+Cold-start users are handled separately by `models/cold_start_questionnaire.py`
+and routed through the lifecycle stages (new → cold start → warm start →
+mature) in `models/recommendation_router.py`. Details, parameters, and
+recorded results: [models/README.md](models/README.md).
+
+## Evaluation
 
 ```powershell
-python data/check.py
+python evaluation/compare_models.py
 ```
 
-Проверка PostgreSQL-схемы и ссылочной целостности:
+Runs all four models on the same train/test split (80/20 per user) and
+reports Precision@K, Recall@K, NDCG@K for K = 10, 20; RMSE/MAE are also
+reported for the two LightFM variants (their scores can be normalized to a
+1–5 scale, unlike the ranking-only LightGCN and content-based models).
+Metric implementations: `evaluation/metrics.py`.
 
-```powershell
-python database/check_db.py --db movies_db --user postgres --password secret
-```
+Recorded results from prior runs are in [models/README.md](models/README.md)
+and [models/README_lightFMresults.md](models/README_lightFMresults.md).
 
-## Рекомендации
+## Demo
 
-- `recommender/questionnaire.py` - cold-start для нового пользователя.
-- `recommender/hybrid.py` - гибрид SVD + FAISS/content-based.
-- `recommender/content_based&colaborative.ipynb` - исследовательский ноутбук.
-
-SVD-модель должна быть обучена на текущих колонках:
-
-```python
-["user_id", "movie_id", "rating"]
-```
-
+`docs/demo/` contains exported standalone HTML builds of the UI
+(`movie-recommendation-system.html` and a compressed variant). Screenshots
+of the live Streamlit app are in `UI_screens/`.
