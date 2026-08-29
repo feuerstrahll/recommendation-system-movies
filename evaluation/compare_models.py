@@ -2,11 +2,18 @@
 Unified evaluation of all 5 recommendation models.
 
 Models:
-  1. Content-Based  – TF-IDF on genres/title, cosine similarity
-  2. SVD            – matrix factorization baseline (scipy truncated SVD)
-  3. LightFM Collab – factorization machines, WARP loss, interaction data only
-  4. LightFM Hybrid – WARP loss + TF-IDF item features
-  5. LightGCN       – graph convolutional network, BPR loss
+  1. Content-Based (TF-IDF) – TF-IDF on genres/title, cosine similarity
+  2. SVD                    – matrix factorization baseline (scipy truncated SVD)
+  3. LightFM Collab         – factorization machines, WARP loss, interaction data only
+  4. LightFM Hybrid         – WARP loss + TF-IDF item features
+  5. LightGCN               – graph convolutional network, BPR loss
+
+Note: "Content-Based (TF-IDF)" here is a lightweight TF-IDF + cosine
+similarity baseline, not the more sophisticated SentenceTransformer +
+FAISS content engine in models/content_based.py. That module is a
+separate, more advanced content-based implementation used elsewhere in the
+project (e.g. cold-start flows); it is not wired into this benchmark, so
+its numbers are not reflected in the results table below.
 
 All collaborative models (SVD, LightFM, LightGCN) are fit on the exact same
 train_df, produced by one shared preprocessing pipeline (load_and_split):
@@ -164,7 +171,10 @@ def sample_eval_users(test_df: pd.DataFrame, n: int = N_EVAL_USERS) -> np.ndarra
 
 
 # ---------------------------------------------------------------------------
-# Model 1: Content-Based (TF-IDF cosine similarity)
+# Model 1: Content-Based (TF-IDF) — TF-IDF cosine similarity
+#
+# This is a lightweight TF-IDF baseline, distinct from the SentenceTransformer
+# + FAISS content engine in models/content_based.py, which is not used here.
 # ---------------------------------------------------------------------------
 
 def evaluate_content_based(train_df, test_df, eval_users):
@@ -533,6 +543,11 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = LightGCN(n_users=n_users, n_items=n_items, emb_dim=64, n_layers=3).to(device)
 
+    # epochs=10 is now comparable to LightFM's epochs=10: train_lightgcn
+    # samples a (pos, neg) pair for EVERY positive interaction of every user
+    # each epoch (not one triple per user total), so one LightGCN epoch and
+    # one LightFM epoch both mean "one pass over every positive interaction"
+    # — deliberately equalized, not copy-pasted from LightFM's default.
     t0 = time.perf_counter()
     user_embs, item_embs, _losses = train_lightgcn(
         model, edge_index, gt_dict, n_users, n_items,
@@ -592,7 +607,7 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
 # ---------------------------------------------------------------------------
 
 PRODUCTION_ANALYSIS = {
-    "Content-Based": {
+    "Content-Based (TF-IDF)": {
         "Cold Start": "Отлично",
         "Масштабируемость": "Хорошая O(I)",
         "Real-Time": "Да",
@@ -670,7 +685,7 @@ def run_comparison(
     selected_models = _expand_models(models)
     results = {}
     if "content" in selected_models:
-        results["Content-Based"] = evaluate_content_based(train_df, test_df, eval_users)
+        results["Content-Based (TF-IDF)"] = evaluate_content_based(train_df, test_df, eval_users)
     if "svd" in selected_models:
         results["SVD"] = evaluate_svd(train_df, test_df, eval_users)
     if "lightfm_collab" in selected_models:

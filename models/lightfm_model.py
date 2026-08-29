@@ -16,6 +16,11 @@ comparable:
 ROC AUC is reported as a secondary diagnostic only (see note at the bottom):
 "unobserved" items are treated as negatives for AUC, which is a standard but
 imperfect proxy for implicit-feedback ranking quality.
+
+Hyperparameters (no_components, learning_rate, loss, random_state, epochs)
+are kept in sync with evaluation/compare_models.py::evaluate_lightfm_collab
+BY DESIGN, so the two "LightFM Collab" runs produce comparable numbers. If
+you change one, check the other.
 """
 
 import os
@@ -124,7 +129,7 @@ def split_per_user(positives, seed=RANDOM_SEED):
 # Training & ranking evaluation
 # ---------------------------------------------------------------------------
 
-def train_and_evaluate(min_user_interactions=5, epochs=5):
+def train_and_evaluate(min_user_interactions=5, epochs=10):
     ratings = load_ratings()
     positives = prepare_implicit_interactions(ratings, min_user_interactions)
     train_df, test_df = split_per_user(positives, seed=RANDOM_SEED)
@@ -143,9 +148,7 @@ def train_and_evaluate(min_user_interactions=5, epochs=5):
     print("Training LightFM model (WARP loss, implicit feedback)...")
     model = LightFM(
         no_components=64,
-        learning_rate=0.01,
-        item_alpha=0.05,
-        user_alpha=0.05,
+        learning_rate=0.05,
         loss="warp",
         random_state=RANDOM_SEED,
     )

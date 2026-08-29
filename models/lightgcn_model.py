@@ -107,14 +107,49 @@ class LightGCN(nn.Module):
         
         nn.init.normal_(self.user_emb.weight, std=0.1)
         nn.init.normal_(self.item_emb.weight, std=0.1)
-    
+
+        # Cache for the normalized sparse adjacency matrix (see _get_adj):
+        # it depends only on graph structure, which is fixed for the whole
+        # training run, so it should be built once rather than on every
+        # forward call.
+        self._adj_cache = None
+        self._adj_cache_edge_index = None
+
+    def _get_adj(self, edge_index):
+        """
+        Normalized sparse adjacency (D^(-1/2) @ A @ D^(-1/2)), cached by
+        edge_index identity. edge_index never changes during training (only
+        the embeddings do), so rebuilding deg/deg_inv_sqrt/the sparse tensor
+        on every forward call — every batch, every epoch — was pure repeated
+        work with no effect on the result.
+        """
+        if self._adj_cache is not None and self._adj_cache_edge_index is edge_index:
+            return self._adj_cache
+
+        n_nodes = self.n_users + self.n_items
+        row, col = edge_index
+        deg = degree(col, n_nodes, dtype=self.user_emb.weight.dtype)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+
+        edge_weight = deg_inv_sqrt[row] * deg_inv_sqrt[col]
+        adj = torch.sparse_coo_tensor(
+            edge_index,
+            edge_weight,
+            (n_nodes, n_nodes)
+        ).to(device)
+
+        self._adj_cache = adj
+        self._adj_cache_edge_index = edge_index
+        return adj
+
     def forward(self, edge_index):
         """
         Forward pass LightGCN.
-        
+
         Args:
             edge_index: граф (2, num_edges)
-        
+
         Returns:
             user_embs: эмбеддинги пользователей (n_users, emb_dim)
             item_embs: эмбеддинги фильмов (n_items, emb_dim)
@@ -122,23 +157,9 @@ class LightGCN(nn.Module):
         # Объединяем эмбеддинги (пользователи + фильмы)
         emb = torch.cat([self.user_emb.weight, self.item_emb.weight], dim=0)
         embs = [emb]
-        
-        # Строим матрицу смежности с нормализацией
-        row, col = edge_index
-        deg = degree(col, emb.size(0), dtype=emb.dtype)
-        deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-        
-        # Нормализованные веса рёбер: D^(-1/2) @ A @ D^(-1/2)
-        edge_weight = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-        
-        # Разреженная матрица смежности
-        adj = torch.sparse_coo_tensor(
-            edge_index, 
-            edge_weight, 
-            (emb.size(0), emb.size(0))
-        ).to(device)
-        
+
+        adj = self._get_adj(edge_index)
+
         # K слоёв графовой свёртки
         for _ in range(self.n_layers):
             emb = torch.sparse.mm(adj, emb)
@@ -202,29 +223,42 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
     model.train()
     losses_history = []
 
+    # Training exposure per epoch is equalized against LightFM: LightFM's
+    # "one epoch" is one WARP pass over EVERY positive interaction, so one
+    # (user, pos) triple per user per epoch here (regardless of how many
+    # positives that user has) gave LightGCN far fewer gradient-relevant
+    # examples per epoch at the same epochs= value — the "10 epochs vs 10
+    # epochs" comparison in the results table was misleading. Instead,
+    # sample neg_samples negatives for EVERY positive interaction of every
+    # user each epoch, so the number of training examples scales with the
+    # actual interaction count, same as LightFM.
+    u_idx_list = []
+    pos_idx_list = []
+    pos_idx_set_per_example = []
+    for i, u_original_id in enumerate(all_users_mapped):
+        u_internal = user_map[u_original_id]
+        for pos_item in all_pos[i]:
+            u_idx_list.append(u_internal)
+            pos_idx_list.append(item_map[pos_item])
+            pos_idx_set_per_example.append(all_pos_idx_sets[i])
+
     for epoch in range(epochs):
-        # Сэмплируем по одной (user, pos, neg) тройке на каждого пользователя за эпоху
-        u_idx_list = [user_map[u] for u in all_users_mapped]
-        pos_items = [rng.choice(all_pos[i]) for i in range(len(all_users_mapped))]
-        pos_idx_list = [item_map[i] for i in pos_items]
-
         neg_idx_list = []
-        for i in range(len(all_users_mapped)):
-            pos_idx_set = all_pos_idx_sets[i]
-            while True:
-                candidate = rng.randint(0, n_items)
-                if candidate not in pos_idx_set:
-                    neg_idx_list.append(candidate)
-                    break
+        for _ in range(neg_samples):
+            for pos_idx_set in pos_idx_set_per_example:
+                while True:
+                    candidate = rng.randint(0, n_items)
+                    if candidate not in pos_idx_set:
+                        neg_idx_list.append(candidate)
+                        break
 
-        u_idx = torch.tensor(u_idx_list, device=device)
-        pos_idx = torch.tensor(pos_idx_list, device=device)
+        u_idx = torch.tensor(u_idx_list * neg_samples, device=device)
+        pos_idx = torch.tensor(pos_idx_list * neg_samples, device=device)
         neg_idx = torch.tensor(neg_idx_list, device=device)
 
-        # optimizer.step() PER BATCH, not per epoch: with one sample per user
-        # per epoch, a single step/epoch means epochs=10 gives only 10 real
-        # gradient updates total — nowhere near enough to move the BPR loss
-        # off its random-init value of ln(2) ~= 0.693. Each batch recomputes
+        # optimizer.step() PER BATCH, not per epoch (a step-per-epoch design
+        # gave far too few real gradient updates to move the BPR loss off
+        # its random-init value of ln(2) ~= 0.693). Each batch recomputes
         # the graph forward pass since parameters (and therefore user_embs/
         # item_embs) change after every optimizer.step().
         total_loss = 0.0
