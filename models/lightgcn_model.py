@@ -66,8 +66,8 @@ def prepare_lightgcn_data(ratings_df, min_user_interactions=0):
     
     # Делаем граф неориентированным (двусторонние рёбра)
     edge_index_undirected = torch.cat([edge_index, edge_index[[1, 0]]], dim=1)
-    edge_index_undirected, _ = coalesce(
-        edge_index_undirected, 
+    edge_index_undirected = coalesce(
+        edge_index_undirected,
         num_nodes=n_users + n_items
     )
     
