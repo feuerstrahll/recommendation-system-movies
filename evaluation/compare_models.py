@@ -551,7 +551,7 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
     t0 = time.perf_counter()
     user_embs, item_embs, _losses = train_lightgcn(
         model, edge_index, gt_dict, n_users, n_items,
-        user_map, item_map, lr=0.001, epochs=10, batch_size=1024,
+        user_map, item_map, lr=0.001, epochs=10, batch_size=8192,
     )
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
