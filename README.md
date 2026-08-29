@@ -10,7 +10,8 @@ approaches (content-based, SVD, LightFM, LightGCN) built on
 [The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset).
 
 This is the active development branch: model implementations, database
-tooling, evaluation, and a Streamlit UI.
+tooling, evaluation, and a Streamlit UI. `main` was merged to match this
+branch; see [CONTRIBUTING.md](CONTRIBUTING.md) for the current workflow.
 
 ## Table of Contents
 
