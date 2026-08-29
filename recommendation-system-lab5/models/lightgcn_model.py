@@ -183,14 +183,19 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
     model.to(device)
     edge_index = edge_index.to(device)
     
-    # Собираем валидные пользователи с positive items
+    # Собираем валидные пользователи с positive items (сразу в виде эмбеддинг-индексов)
     all_users_mapped = []
-    all_pos = []
-    
+    all_pos = []          # оригинальные item id, нужны для np.random.choice ниже
+    all_pos_idx_sets = [] # те же позитивы, но как set индексов эмбеддингов — для фильтрации негативов
+
     for u_original_id in gt_dict.keys():
         if u_original_id in user_map and len(gt_dict[u_original_id]) > 0:
+            pos_ids = [i for i in gt_dict[u_original_id] if i in item_map]
+            if not pos_ids:
+                continue
             all_users_mapped.append(u_original_id)
-            all_pos.append(gt_dict[u_original_id])
+            all_pos.append(pos_ids)
+            all_pos_idx_sets.append({item_map[i] for i in pos_ids})
     
     model.train()
     losses_history = []
@@ -222,8 +227,16 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
                 pos_items.append(np.random.choice(all_pos[start + i]))
             pos_idx = torch.tensor([item_map[i] for i in pos_items], device=device)
             
-            # Negative items (случайно из всех фильмов)
-            neg_idx = torch.randint(0, n_items, (len(u_batch),), device=device)
+            # Negative items (случайно из всех фильмов, кроме уже известных позитивов пользователя)
+            neg_items_idx = []
+            for i in range(len(u_batch)):
+                pos_idx_set = all_pos_idx_sets[start + i]
+                while True:
+                    candidate = np.random.randint(0, n_items)
+                    if candidate not in pos_idx_set:
+                        neg_items_idx.append(candidate)
+                        break
+            neg_idx = torch.tensor(neg_items_idx, device=device)
             
             # Вычисляем скалярные произведения (scores)
             u_emb = user_embs[u_idx]
@@ -262,48 +275,51 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
 # 4. МЕТРИКИ (Precision@K, Recall@K, NDCG@K)
 # ==========================================================
 
-def evaluate_model(user_embs, item_embs, gt_dict, user_inv, item_inv, 
-                   user_map, item_map, k=10):
+def evaluate_model(user_embs, item_embs, gt_dict, user_inv, item_inv,
+                   user_map, item_map, k=10, seen_items=None):
     """
     Оценка модели по метрикам Precision@K, Recall@K, NDCG@K.
-    
+
     Args:
         user_embs, item_embs: эмбеддинги из модели
-        gt_dict: ground-truth {user_id: [item_ids]}
+        gt_dict: ground-truth {user_id: [item_ids]} — должен быть held-out (test), не train
         user_inv, item_inv: обратные маппинги
         user_map, item_map: прямые маппинги
         k: количество рекомендаций
-    
+        seen_items: optional {user_id: [item_ids]} — train-взаимодействия, исключаются
+            из top-K отдельно от gt_dict, чтобы модель не могла "порекомендовать"
+            фильм, который пользователь уже видел при обучении
+
     Returns:
         dict с метриками
     """
     user_embs_cpu = user_embs.cpu().detach()
     item_embs_cpu = item_embs.cpu().detach()
-    
+
     precisions, recalls, ndcgs = [], [], []
-    
+
     for u_original_id in tqdm(gt_dict.keys(), desc=f"Evaluating @ K={k}", leave=False):
         # Проверяем, есть ли пользователь в маппинге
         if u_original_id not in user_map:
             continue
-        
+
         u_mapped_idx = user_map[u_original_id]
         true_items = set(gt_dict[u_original_id])
-        
+
         if len(true_items) == 0:
             continue
-        
+
         # Вычисляем scores между пользователем и всеми фильмами
         u_emb = user_embs_cpu[u_mapped_idx]  # (emb_dim,)
         scores = u_emb @ item_embs_cpu.T     # (n_items,)
-        
-        # Исключаем уже взаимодействовавшие фильмы
-        # Маппируем known items
+
+        # Исключаем из ранжирования фильмы, уже виденные в train (не должны попасть в рекомендации)
+        exclude_items = set(seen_items.get(u_original_id, [])) if seen_items else set()
         known_items_mapped = set()
-        for item_id in true_items:
+        for item_id in exclude_items:
             if item_id in item_map:
                 known_items_mapped.add(item_map[item_id])
-        
+
         scores_copy = scores.clone()
         for item_idx in known_items_mapped:
             scores_copy[item_idx] = -1e9
@@ -347,47 +363,69 @@ def evaluate_model(user_embs, item_embs, gt_dict, user_inv, item_inv,
 
 def main():
     """
-    Полный пайплайн: загрузка -> подготовка -> обучение -> оценка
+    Полный пайплайн: загрузка -> train/test split -> подготовка -> обучение -> оценка на held-out данных
     """
     # Пути по умолчанию
     data_dir = Path(__file__).resolve().parent.parent / "data" / "processed"
-    
+
     print("=" * 60)
     print("🚀 LightGCN Recommendation System")
     print("=" * 60)
-    
-    # Загрузка данных
+
+    # Загрузка данных. ratings.csv — канонический файл проекта, ключ movie_id = TMDB id.
+    # ratings_clean.csv используется только как запасной вариант (raw MovieLens id).
     print("\n📥 Loading data...")
-    ratings_path = data_dir / "ratings_clean.csv"
-    movies_path = data_dir / "movies_clean.csv"
-    
+    ratings_path = data_dir / "ratings.csv"
+    id_cols = {"user": "user_id", "movie": "movie_id"}
+
     if not ratings_path.exists():
-        print(f"⚠️  {ratings_path} not found, trying ratings.csv")
-        ratings_path = data_dir / "ratings.csv"
-    
-    if not movies_path.exists():
-        print(f"⚠️  {movies_path} not found, trying movies.csv")
-        movies_path = data_dir / "movies.csv"
-    
+        print(f"⚠️  {ratings_path} not found, trying ratings_clean.csv")
+        ratings_path = data_dir / "ratings_clean.csv"
+        id_cols = {"user": "userId", "movie": "movieId"}
+
     ratings = pd.read_csv(ratings_path)
-    movies = pd.read_csv(movies_path)
-    
-    print(f"✓ Loaded {len(ratings)} ratings, {len(movies)} movies")
-    
-    # Для LightGCN используем implicit feedback (просто взаимодействия)
-    # Если есть рейтинги, можно отфильтровать: rating >= 4.0
+    print(f"✓ Loaded {len(ratings)} ratings from {ratings_path.name}")
+
+    # Нормализуем к userId/movieId, как ожидает prepare_lightgcn_data
+    ratings = ratings.rename(columns={id_cols["user"]: "userId", id_cols["movie"]: "movieId"})
+
+    # Implicit feedback: оставляем только положительные взаимодействия (rating >= 4.0)
     if 'rating' in ratings.columns:
         ratings_filtered = ratings[ratings['rating'] >= 4.0][['userId', 'movieId']].drop_duplicates()
         print(f"✓ Filtered to {len(ratings_filtered)} interactions (rating >= 4.0)")
     else:
         ratings_filtered = ratings[['userId', 'movieId']].drop_duplicates()
         print(f"✓ Using {len(ratings_filtered)} unique interactions")
-    
-    # Подготовка данных
+
+    # Держим только пользователей с достаточным числом взаимодействий,
+    # чтобы после разбиения у каждого было что-то и в train, и в test
+    user_counts = ratings_filtered['userId'].value_counts()
+    valid_users = user_counts[user_counts >= 5].index
+    ratings_filtered = ratings_filtered[ratings_filtered['userId'].isin(valid_users)].copy()
+    print(f"✓ Kept {len(ratings_filtered)} interactions from {ratings_filtered['userId'].nunique()} users with >= 5 interactions")
+
+    # 80/20 train/test split по каждому пользователю (не по всей таблице сразу),
+    # чтобы каждый пользователь остался и в train, и в test
+    print("\n✂️  Splitting train/test (80/20 per user)...")
+    train_rows, test_rows = [], []
+    rng = np.random.RandomState(42)
+    for _, udf in ratings_filtered.groupby('userId'):
+        shuffled = udf.sample(frac=1, random_state=rng)
+        n_train = max(1, int(len(shuffled) * 0.8))
+        train_rows.append(shuffled.iloc[:n_train])
+        test_rows.append(shuffled.iloc[n_train:])
+    train_df = pd.concat(train_rows, ignore_index=True)
+    test_df = pd.concat(test_rows, ignore_index=True)
+    print(f"✓ Train: {len(train_df)} interactions | Test: {len(test_df)} interactions")
+
+    # Подготовка графа СТРОГО на train, чтобы тестовые взаимодействия не просачивались в обучение
     print("\n🔧 Preparing data...")
-    edge_index, n_users, n_items, user_inv, item_inv, gt_dict, user_map, item_map = \
-        prepare_lightgcn_data(ratings_filtered, min_user_interactions=2)
-    
+    edge_index, n_users, n_items, user_inv, item_inv, train_gt_dict, user_map, item_map = \
+        prepare_lightgcn_data(train_df, min_user_interactions=0)
+
+    # Ground truth для оценки — это TEST-взаимодействия (held-out), а не train
+    test_gt_dict = test_df.groupby('userId')['movieId'].apply(list).to_dict()
+
     # Инициализация модели
     print("\n🏗️  Building LightGCN model...")
     model = LightGCN(
@@ -397,13 +435,13 @@ def main():
         n_layers=3       # количество GCN слоёв
     )
     print(f"✓ Model ready: {sum(p.numel() for p in model.parameters())} parameters")
-    
-    # Обучение
+
+    # Обучение — только на train_gt_dict / edge_index из train
     print("\n🎓 Training model...")
     user_embs, item_embs, losses = train_lightgcn(
         model,
         edge_index,
-        gt_dict,
+        train_gt_dict,
         n_users,
         n_items,
         user_map,
@@ -412,30 +450,31 @@ def main():
         epochs=20,
         batch_size=1024
     )
-    
-    # Оценка
-    print("\n📊 Evaluating model...")
-    metrics_k10 = evaluate_model(user_embs, item_embs, gt_dict, user_inv, item_inv,
-                                  user_map, item_map, k=10)
-    metrics_k20 = evaluate_model(user_embs, item_embs, gt_dict, user_inv, item_inv,
-                                  user_map, item_map, k=20)
-    
+
+    # Оценка на held-out test-взаимодействиях; seen_items=train_gt_dict исключает
+    # из top-K фильмы, уже виденные пользователем в train.
+    print("\n📊 Evaluating model on held-out test set...")
+    metrics_k10 = evaluate_model(user_embs, item_embs, test_gt_dict, user_inv, item_inv,
+                                  user_map, item_map, k=10, seen_items=train_gt_dict)
+    metrics_k20 = evaluate_model(user_embs, item_embs, test_gt_dict, user_inv, item_inv,
+                                  user_map, item_map, k=20, seen_items=train_gt_dict)
+
     print("\n" + "=" * 60)
-    print("📈 LightGCN EVALUATION RESULTS")
+    print("📈 LightGCN EVALUATION RESULTS (held-out test set)")
     print("=" * 60)
     print(f"\n✓ Evaluated {metrics_k10['n_evaluated_users']} users")
     print("\n🎯 Metrics @ K=10:")
     for metric, value in metrics_k10.items():
         if metric != 'n_evaluated_users':
             print(f"  {metric:15s}: {value:.4f}")
-    
+
     print("\n🎯 Metrics @ K=20:")
     for metric, value in metrics_k20.items():
         if metric != 'n_evaluated_users':
             print(f"  {metric:15s}: {value:.4f}")
-    
+
     print("\n" + "=" * 60)
-    
+
     return model, user_embs, item_embs, metrics_k10, metrics_k20
 
 
