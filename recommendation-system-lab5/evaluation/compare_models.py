@@ -1,21 +1,32 @@
 """
-Unified evaluation of all 4 recommendation models.
+Unified evaluation of all 5 recommendation models.
 
 Models:
   1. Content-Based  – TF-IDF on genres/title, cosine similarity
-  2. LightFM Collab – factorization machines, WARP loss, interaction data only
-  3. LightFM Hybrid – WARP loss + TF-IDF item features
-  4. LightGCN       – graph convolutional network, BPR loss
+  2. SVD            – matrix factorization baseline (scipy truncated SVD)
+  3. LightFM Collab – factorization machines, WARP loss, interaction data only
+  4. LightFM Hybrid – WARP loss + TF-IDF item features
+  5. LightGCN       – graph convolutional network, BPR loss
 
-Metrics for ALL models:
-  Precision@K, Recall@K, NDCG@K  (K = 10, 20)
+All collaborative models (SVD, LightFM, LightGCN) are fit on the exact same
+train_df, produced by one shared preprocessing pipeline (load_and_split):
+  - Binarization: rating >= 4.0 counts as a positive interaction, everything
+    else is dropped — every collaborative model sees the same 0/1
+    interactions, not raw explicit ratings.
+  - Filtering: only users with >= MIN_USER_INTERACTIONS positive interactions
+    are kept.
+  - Split: a strict 80/20 split per user (not a global random split), so
+    every user has both train and test rows.
+  - Evaluation: items already seen in train are excluded from a user's
+    top-K at eval time, and test interactions on items never seen in train
+    (cold-start items with no embedding) are dropped from ground truth
+    before scoring, on every model.
 
-Additional for LightFM models only (explicit ratings available):
-  RMSE, MAE  via score normalization to [1, 5] scale
+Metrics for ALL models: Precision@K, Recall@K, NDCG@K  (K = 10, 20)
 
-Reasoning: LightGCN and Content-Based optimize for ranking (not rating
-prediction), so RMSE is not meaningful for them. LightFM outputs raw
-logits that can be normalized to [1,5] as a heuristic.
+RMSE/MAE are no longer reported: with binarized (0/1) interactions there is
+no rating scale left to normalize scores against, so a rating-prediction
+error metric isn't meaningful for any of the models here anymore.
 
 Usage:
   cd recommendation-system-lab5
@@ -51,21 +62,6 @@ LIGHTFM_EPOCHS = 10
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rmse_mae_normalized(raw_scores: np.ndarray, true_ratings: np.ndarray):
-    """Normalize LightFM raw scores to [1,5] then compute RMSE and MAE."""
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-
-    lo, hi = raw_scores.min(), raw_scores.max()
-    if hi == lo:
-        norm = np.full_like(raw_scores, 3.0)
-    else:
-        norm = 1.0 + 4.0 * (raw_scores - lo) / (hi - lo)
-    norm = np.clip(norm, 1.0, 5.0)
-    rmse = float(np.sqrt(mean_squared_error(true_ratings, norm)))
-    mae = float(mean_absolute_error(true_ratings, norm))
-    return rmse, mae
-
-
 def _ranking_metrics(ranked_ids, relevant: set, k_values):
     """Return dict of P@k, R@k, NDCG@k for a single user."""
     return {
@@ -84,13 +80,25 @@ def _ranking_metrics(ranked_ids, relevant: set, k_values):
 # Data loading & splitting
 # ---------------------------------------------------------------------------
 
+RATING_THRESHOLD = 4.0
+
+
 def load_and_split(
     min_interactions: int = MIN_USER_INTERACTIONS,
     max_rows: int | None = None,
 ):
     """
-    Load ratings.csv (TMDB movie IDs) and split 80/20 per user.
-    Returns train_df, test_df with columns [user_id, movie_id, rating].
+    Load ratings.csv (TMDB movie IDs), binarize to implicit positive
+    interactions (rating >= RATING_THRESHOLD), and split 80/20 per user.
+
+    This is the single shared preprocessing step for every collaborative
+    model (SVD, LightFM, LightGCN) — they all train on the exact same
+    train_df, so any metric difference between them reflects the model,
+    not the data it saw.
+
+    Returns train_df, test_df with columns [user_id, movie_id]. Explicit
+    rating values are intentionally dropped after binarization — every
+    downstream model treats interactions as implicit 0/1 feedback.
     """
     path = DATA_DIR / "ratings.csv"
     if not path.exists():
@@ -105,17 +113,18 @@ def load_and_split(
     df["user_id"] = df["user_id"].astype(int)
     df["movie_id"] = df["movie_id"].astype(int)
 
-    # Keep users with enough interactions
+    # Binarization: only positive interactions survive from here on.
+    df = df[df["rating"] >= RATING_THRESHOLD][["user_id", "movie_id"]].drop_duplicates()
+    print(f"  Positive interactions (rating >= {RATING_THRESHOLD}): {len(df):,}")
+
+    # Filtering: keep users with enough positive interactions
     counts = df["user_id"].value_counts()
     df = df[df["user_id"].isin(counts[counts >= min_interactions].index)].copy()
 
-    # Keep items with at least 3 interactions
-    icounts = df["movie_id"].value_counts()
-    df = df[df["movie_id"].isin(icounts[icounts >= 3].index)].copy()
-
     train_rows, test_rows = [], []
+    rng = np.random.RandomState(RANDOM_SEED)
     for _, udf in df.groupby("user_id"):
-        shuffled = udf.sample(frac=1, random_state=RANDOM_SEED)
+        shuffled = udf.sample(frac=1, random_state=rng)
         n_train = max(1, int(len(shuffled) * 0.8))
         train_rows.append(shuffled.iloc[:n_train])
         test_rows.append(shuffled.iloc[n_train:])
@@ -128,6 +137,21 @@ def load_and_split(
     return train_df, test_df
 
 
+def drop_unseen_test_items(train_df, test_df, valid_movie_ids):
+    """
+    Drop test interactions on items never seen in train (or outside a
+    model's own item vocabulary) — such items have no embedding and can
+    never be recommended, so leaving them in ground truth would silently
+    deflate Recall/NDCG for reasons unrelated to model quality. Applied
+    identically for every model right before scoring.
+    """
+    known = test_df[test_df["movie_id"].isin(valid_movie_ids)]
+    n_dropped = len(test_df) - len(known)
+    if n_dropped > 0:
+        print(f"  ⚠️  Dropped {n_dropped} test interactions on items unseen in train")
+    return known
+
+
 def sample_eval_users(test_df: pd.DataFrame, n: int = N_EVAL_USERS) -> np.ndarray:
     users = test_df["user_id"].unique()
     return np.random.choice(users, size=min(n, len(users)), replace=False)
@@ -138,7 +162,7 @@ def sample_eval_users(test_df: pd.DataFrame, n: int = N_EVAL_USERS) -> np.ndarra
 # ---------------------------------------------------------------------------
 
 def evaluate_content_based(train_df, test_df, eval_users):
-    print("\n[1/4] Content-Based (TF-IDF genres + title)...")
+    print("\n[1/5] Content-Based (TF-IDF genres + title)...")
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity as cos_sim
 
@@ -170,11 +194,12 @@ def evaluate_content_based(train_df, test_df, eval_users):
 
     # Index: movie_id (TMDB) → row in item_matrix
     mid_to_idx = {mid: i for i, mid in enumerate(movies[id_col])}
-
-    # Ground truth sets
-    test_rel = test_df.groupby("user_id")["movie_id"].apply(set).to_dict()
-    train_items = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
     all_movie_ids = movies[id_col].tolist()
+
+    # Ground truth sets — drop test items this catalog doesn't even have metadata for
+    test_df_known = drop_unseen_test_items(train_df, test_df, set(mid_to_idx.keys()))
+    test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
+    train_items = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
     per_k: dict = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
     inf_times = []
@@ -209,19 +234,93 @@ def evaluate_content_based(train_df, test_df, eval_users):
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
-    result["RMSE"] = "N/A"
-    result["MAE"] = "N/A"
     result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
     result["Train s"] = 0.0
     return result
 
 
 # ---------------------------------------------------------------------------
-# Model 2: LightFM Collaborative
+# Model 2: SVD (matrix factorization baseline)
+# ---------------------------------------------------------------------------
+
+def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50):
+    print("\n[2/5] SVD (matrix factorization baseline)...")
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.linalg import svds
+
+    all_users = train_df["user_id"].unique()
+    all_items = train_df["movie_id"].unique()
+    n_users = len(all_users)
+    n_items = len(all_items)
+
+    user_map = {u: i for i, u in enumerate(all_users)}
+    item_map = {m: i for i, m in enumerate(all_items)}
+    item_inv = {i: m for m, i in item_map.items()}
+
+    u_idx = train_df["user_id"].map(user_map).values.astype(np.int32)
+    i_idx = train_df["movie_id"].map(item_map).values.astype(np.int32)
+    # Same binarized 0/1 interactions as every other collaborative model —
+    # train_df has no rating column left after load_and_split's binarization.
+    vals = np.ones(len(train_df), dtype=np.float32)
+    matrix = csr_matrix((vals, (u_idx, i_idx)), shape=(n_users, n_items))
+
+    k = min(n_factors, min(matrix.shape) - 1)
+
+    t0 = time.perf_counter()
+    u, s, vt = svds(matrix, k=k)
+    user_factors = u * s
+    item_factors = vt.T
+    train_time = time.perf_counter() - t0
+    print(f"  Train time: {train_time:.1f}s (k={k} latent factors)")
+
+    test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
+    test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
+    train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
+
+    per_k = {k_: {"precision": [], "recall": [], "ndcg": []} for k_ in K_VALUES}
+    inf_times = []
+
+    for uid in eval_users:
+        if uid not in user_map:
+            continue
+        relevant = test_rel.get(uid)
+        if not relevant:
+            continue
+
+        u_internal = user_map[uid]
+
+        t0 = time.perf_counter()
+        scores = item_factors @ user_factors[u_internal]
+        inf_times.append(time.perf_counter() - t0)
+
+        tr_items = train_sets.get(uid, set())
+        ranked = [
+            item_inv[i]
+            for i in np.argsort(scores)[::-1]
+            if item_inv[i] not in tr_items
+        ]
+
+        for k_ in K_VALUES:
+            per_k[k_]["precision"].append(precision_at_k(ranked, relevant, k_))
+            per_k[k_]["recall"].append(recall_at_k(ranked, relevant, k_))
+            per_k[k_]["ndcg"].append(ndcg_at_k(ranked, relevant, k_))
+
+    result: dict = {}
+    for k_ in K_VALUES:
+        result[f"P@{k_}"] = float(np.mean(per_k[k_]["precision"]))
+        result[f"R@{k_}"] = float(np.mean(per_k[k_]["recall"]))
+        result[f"NDCG@{k_}"] = float(np.mean(per_k[k_]["ndcg"]))
+    result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
+    result["Train s"] = train_time
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Model 3: LightFM Collaborative
 # ---------------------------------------------------------------------------
 
 def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS):
-    print("\n[2/4] LightFM Collaborative (WARP loss)...")
+    print("\n[3/5] LightFM Collaborative (WARP loss)...")
     from lightfm import LightFM
 
     all_users = train_df["user_id"].unique()
@@ -234,7 +333,8 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
 
     u_idx = train_df["user_id"].map(user_map).values.astype(np.int32)
     i_idx = train_df["movie_id"].map(item_map).values.astype(np.int32)
-    weights = train_df["rating"].values.astype(np.float32)
+    # Binarized interactions — same 0/1 signal SVD and LightGCN train on.
+    weights = np.ones(len(train_df), dtype=np.float32)
     train_matrix = coo_matrix((weights, (u_idx, i_idx)), shape=(n_users, n_items))
 
     model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
@@ -244,14 +344,14 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
-    test_rel = test_df.groupby("user_id")["movie_id"].apply(set).to_dict()
+    test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
+    test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
     all_item_ids = list(item_map.keys())
     all_item_internal = np.array([item_map[m] for m in all_item_ids], dtype=np.int32)
 
     per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
-    raw_preds, true_rats = [], []
     inf_times = []
 
     for uid in eval_users:
@@ -280,46 +380,22 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
 
-        # Collect raw scores on test items for RMSE
-        test_items_list = list(relevant & set(item_map.keys()))
-        if test_items_list:
-            ti_internal = np.array([item_map[m] for m in test_items_list], dtype=np.int32)
-            u_arr_rmse = np.full(len(ti_internal), u_internal, dtype=np.int32)
-            raw = model.predict(u_arr_rmse, ti_internal, num_threads=1)
-            true_r = (
-                test_df[
-                    (test_df["user_id"] == uid) & (test_df["movie_id"].isin(test_items_list))
-                ]["rating"].values
-            )
-            min_len = min(len(raw), len(true_r))
-            raw_preds.extend(raw[:min_len])
-            true_rats.extend(true_r[:min_len])
-
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
-
-    if raw_preds:
-        rmse, mae = _rmse_mae_normalized(np.array(raw_preds), np.array(true_rats))
-        result["RMSE"] = rmse
-        result["MAE"] = mae
-    else:
-        result["RMSE"] = "N/A"
-        result["MAE"] = "N/A"
-
     result["Infer ms"] = float(np.mean(inf_times) * 1000)
     result["Train s"] = train_time
     return result
 
 
 # ---------------------------------------------------------------------------
-# Model 3: LightFM Hybrid (collaborative + TF-IDF item features)
+# Model 4: LightFM Hybrid (collaborative + TF-IDF item features)
 # ---------------------------------------------------------------------------
 
 def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS):
-    print("\n[3/4] LightFM Hybrid (WARP + TF-IDF item features)...")
+    print("\n[4/5] LightFM Hybrid (WARP + TF-IDF item features)...")
     from lightfm import LightFM
     from scipy.sparse import csr_matrix
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -366,7 +442,7 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
 
     u_idx = train_df["user_id"].map(user_map).values.astype(np.int32)
     i_idx = train_df["movie_id"].map(item_map).values.astype(np.int32)
-    weights = train_df["rating"].values.astype(np.float32)
+    weights = np.ones(len(train_df), dtype=np.float32)
     train_matrix = coo_matrix((weights, (u_idx, i_idx)), shape=(n_users, n_items))
 
     model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
@@ -376,14 +452,14 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
-    test_rel = test_df.groupby("user_id")["movie_id"].apply(set).to_dict()
+    test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
+    test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
     all_item_ids = list(item_map.keys())
     all_item_internal = np.array([item_map[m] for m in all_item_ids], dtype=np.int32)
 
     per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
-    raw_preds, true_rats = [], []
     inf_times = []
 
     for uid in eval_users:
@@ -412,45 +488,22 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
 
-        test_items_list = list(relevant & set(item_map.keys()))
-        if test_items_list:
-            ti_internal = np.array([item_map[m] for m in test_items_list], dtype=np.int32)
-            u_arr_rmse = np.full(len(ti_internal), u_internal, dtype=np.int32)
-            raw = model.predict(u_arr_rmse, ti_internal, item_features=item_features, num_threads=1)
-            true_r = (
-                test_df[
-                    (test_df["user_id"] == uid) & (test_df["movie_id"].isin(test_items_list))
-                ]["rating"].values
-            )
-            min_len = min(len(raw), len(true_r))
-            raw_preds.extend(raw[:min_len])
-            true_rats.extend(true_r[:min_len])
-
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
-
-    if raw_preds:
-        rmse, mae = _rmse_mae_normalized(np.array(raw_preds), np.array(true_rats))
-        result["RMSE"] = rmse
-        result["MAE"] = mae
-    else:
-        result["RMSE"] = "N/A"
-        result["MAE"] = "N/A"
-
     result["Infer ms"] = float(np.mean(inf_times) * 1000)
     result["Train s"] = train_time
     return result
 
 
 # ---------------------------------------------------------------------------
-# Model 4: LightGCN
+# Model 5: LightGCN
 # ---------------------------------------------------------------------------
 
 def evaluate_lightgcn(train_df, test_df, eval_users):
-    print("\n[4/4] LightGCN (graph convolutional network, BPR loss)...")
+    print("\n[5/5] LightGCN (graph convolutional network, BPR loss)...")
     try:
         import torch
         from models.lightgcn_model import LightGCN, prepare_lightgcn_data, train_lightgcn
@@ -459,14 +512,18 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
         na = {f"P@{k}": "N/A" for k in K_VALUES}
         na |= {f"R@{k}": "N/A" for k in K_VALUES}
         na |= {f"NDCG@{k}": "N/A" for k in K_VALUES}
-        na |= {"RMSE": "N/A", "MAE": "N/A", "Infer ms": "N/A", "Train s": "N/A"}
+        na |= {"Infer ms": "N/A", "Train s": "N/A"}
         return na
 
-    # prepare_lightgcn_data expects userId / movieId columns
+    # prepare_lightgcn_data expects userId / movieId columns.
+    # min_user_interactions=0: train_df is already filtered by load_and_split()
+    # to the same MIN_USER_INTERACTIONS threshold every other model trains on —
+    # filtering again here would silently shrink LightGCN's graph relative to
+    # what SVD/LightFM see.
     train_gcn = train_df.rename(columns={"user_id": "userId", "movie_id": "movieId"})
 
     edge_index, n_users, n_items, user_inv, item_inv, gt_dict, user_map, item_map = (
-        prepare_lightgcn_data(train_gcn.copy(), min_user_interactions=2)
+        prepare_lightgcn_data(train_gcn.copy(), min_user_interactions=0)
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -483,7 +540,8 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
     user_embs = user_embs.detach().cpu().numpy()
     item_embs = item_embs.detach().cpu().numpy()
 
-    test_rel = test_df.groupby("user_id")["movie_id"].apply(set).to_dict()
+    test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
+    test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
     per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
@@ -520,8 +578,6 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
-    result["RMSE"] = "N/A"
-    result["MAE"] = "N/A"
     result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
     result["Train s"] = train_time
     return result
@@ -537,6 +593,13 @@ PRODUCTION_ANALYSIS = {
         "Масштабируемость": "Хорошая O(I)",
         "Real-Time": "Да",
         "Обновление": "Простое (метаданные)",
+        "Сложность": "Низкая",
+    },
+    "SVD": {
+        "Cold Start": "Плохо",
+        "Масштабируемость": "Средняя O(U×I)",
+        "Real-Time": "Нет",
+        "Обновление": "Переобучение",
         "Сложность": "Низкая",
     },
     "LightFM Collab": {
@@ -568,13 +631,14 @@ PRODUCTION_ANALYSIS = {
 # ---------------------------------------------------------------------------
 
 def _expand_models(models: list[str] | None) -> set[str]:
+    all_models = {"content", "svd", "lightfm_collab", "lightfm_hybrid", "lightgcn"}
     if not models:
-        return {"content", "lightfm_collab", "lightfm_hybrid", "lightgcn"}
+        return all_models
 
     expanded: set[str] = set()
     for model in models:
         if model == "all":
-            return {"content", "lightfm_collab", "lightfm_hybrid", "lightgcn"}
+            return all_models
         if model == "lightfm":
             expanded.update({"lightfm_collab", "lightfm_hybrid"})
         else:
@@ -603,6 +667,8 @@ def run_comparison(
     results = {}
     if "content" in selected_models:
         results["Content-Based"] = evaluate_content_based(train_df, test_df, eval_users)
+    if "svd" in selected_models:
+        results["SVD"] = evaluate_svd(train_df, test_df, eval_users)
     if "lightfm_collab" in selected_models:
         results["LightFM Collab"] = evaluate_lightfm_collab(
             train_df, test_df, eval_users, epochs=lightfm_epochs
@@ -619,7 +685,7 @@ def run_comparison(
         [f"P@{k}" for k in K_VALUES]
         + [f"R@{k}" for k in K_VALUES]
         + [f"NDCG@{k}" for k in K_VALUES]
-        + ["RMSE", "MAE", "Infer ms", "Train s"]
+        + ["Infer ms", "Train s"]
     )
     df = pd.DataFrame(results).T
     df = df[[c for c in col_order if c in df.columns]]
@@ -645,8 +711,10 @@ def run_comparison(
     print("  ПРИМЕЧАНИЯ")
     print("=" * 72)
     print(
-        "RMSE/MAE:  только для LightFM моделей. Raw logits нормализованы в [1,5].\n"
-        "           Сравнивать RMSE между LightFM и GNN/Content некорректно.\n"
+        f"Protocol:  SVD, LightFM и LightGCN обучены на ОДНОМ train_df — implicit\n"
+        f"           interactions (rating >= {RATING_THRESHOLD}), пользователи с >= "
+        f"{MIN_USER_INTERACTIONS} лайками,\n"
+        "           80/20 split per user. Метрики поэтому напрямую сравнимы.\n"
         "Infer ms:  время предсказания для одного пользователя (миллисекунды).\n"
         "Train s:   полное время обучения на train_df (секунды)."
     )
@@ -660,7 +728,7 @@ def parse_args() -> argparse.Namespace:
         "--models",
         default="all",
         help=(
-            "Comma-separated models: all, content, lightfm, lightfm_collab, "
+            "Comma-separated models: all, content, svd, lightfm, lightfm_collab, "
             "lightfm_hybrid, lightgcn."
         ),
     )
