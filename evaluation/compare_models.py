@@ -35,6 +35,20 @@ RMSE/MAE are no longer reported: with binarized (0/1) interactions there is
 no rating scale left to normalize scores against, so a rating-prediction
 error metric isn't meaningful for any of the models here anymore.
 
+Beyond per-user ranking accuracy, two aggregate diagnostics are also
+reported, computed from the same top-K lists every model already produces
+(no retraining needed):
+  - Catalog coverage: % of the catalog that appears at least once across
+    all eval users' top-K. Precision/Recall/NDCG score per-user relevance
+    and say nothing about whether a model just recommends the same
+    popular items to everyone (a common failure mode, especially for
+    collaborative/graph models) — coverage surfaces that directly.
+  - Performance by user interaction count (cold/light/heavy, matching the
+    lifecycle bands models/recommendation_router.py routes on): an overall
+    average can hide a model that only works well for heavy users, which
+    matters here since the router's whole design assumes different models
+    suit different lifecycle stages.
+
 Usage:
   python evaluation/compare_models.py
 """
@@ -65,10 +79,22 @@ from evaluation.metrics import precision_at_k, recall_at_k, ndcg_at_k
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "processed"
 K_VALUES = [10, 20]
+MAX_K = max(K_VALUES)
 N_EVAL_USERS = 300
 MIN_USER_INTERACTIONS = 5
 RANDOM_SEED = 42
 LIGHTFM_EPOCHS = 10
+
+# Interaction-count segments for the cold/light/heavy breakdown in
+# analyze_segments_and_coverage. Boundaries follow the same lifecycle
+# stages models/recommendation_router.py routes users through (cold start
+# 1-5, warm start 5-20, mature 20+) so this table can be read directly
+# against that routing logic.
+INTERACTION_SEGMENTS = [
+    ("cold (5-9)", 5, 10),
+    ("light (10-19)", 10, 20),
+    ("heavy (20+)", 20, float("inf")),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +203,7 @@ def sample_eval_users(test_df: pd.DataFrame, n: int = N_EVAL_USERS) -> np.ndarra
 # + FAISS content engine in models/content_based.py, which is not used here.
 # ---------------------------------------------------------------------------
 
-def evaluate_content_based(train_df, test_df, eval_users):
+def evaluate_content_based(train_df, test_df, eval_users, top_k_store: dict | None = None):
     print("\n[1/5] Content-Based (TF-IDF genres + title)...")
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity as cos_sim
@@ -239,6 +265,8 @@ def evaluate_content_based(train_df, test_df, eval_users):
             for i in np.argsort(scores)[::-1]
             if all_movie_ids[i] not in tr_items
         ]
+        if top_k_store is not None:
+            top_k_store[uid] = ranked[:MAX_K]
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
@@ -259,7 +287,7 @@ def evaluate_content_based(train_df, test_df, eval_users):
 # Model 2: SVD (matrix factorization baseline)
 # ---------------------------------------------------------------------------
 
-def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50):
+def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50, top_k_store: dict | None = None):
     print("\n[2/5] SVD (matrix factorization baseline)...")
     from models.svd_model import train_svd
 
@@ -295,6 +323,8 @@ def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50):
             for i in np.argsort(scores)[::-1]
             if item_inv[i] not in tr_items
         ]
+        if top_k_store is not None:
+            top_k_store[uid] = ranked[:MAX_K]
 
         for k_ in K_VALUES:
             per_k[k_]["precision"].append(precision_at_k(ranked, relevant, k_))
@@ -315,7 +345,7 @@ def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50):
 # Model 3: LightFM Collaborative
 # ---------------------------------------------------------------------------
 
-def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS):
+def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS, top_k_store: dict | None = None):
     print("\n[3/5] LightFM Collaborative (WARP loss)...")
     from lightfm import LightFM
 
@@ -370,6 +400,8 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
             for i in np.argsort(scores)[::-1]
             if all_item_ids[i] not in tr_items
         ]
+        if top_k_store is not None:
+            top_k_store[uid] = ranked[:MAX_K]
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
@@ -390,7 +422,7 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
 # Model 4: LightFM Hybrid (collaborative + TF-IDF item features)
 # ---------------------------------------------------------------------------
 
-def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS):
+def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS, top_k_store: dict | None = None):
     print("\n[4/5] LightFM Hybrid (WARP + TF-IDF item features)...")
     from lightfm import LightFM
     from scipy.sparse import csr_matrix
@@ -496,6 +528,8 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
             for i in np.argsort(scores)[::-1]
             if all_item_ids[i] not in tr_items
         ]
+        if top_k_store is not None:
+            top_k_store[uid] = ranked[:MAX_K]
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
@@ -516,7 +550,7 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
 # Model 5: LightGCN
 # ---------------------------------------------------------------------------
 
-def evaluate_lightgcn(train_df, test_df, eval_users):
+def evaluate_lightgcn(train_df, test_df, eval_users, top_k_store: dict | None = None):
     print("\n[5/5] LightGCN (graph convolutional network, BPR loss)...")
     try:
         import torch
@@ -586,6 +620,8 @@ def evaluate_lightgcn(train_df, test_df, eval_users):
             for i in np.argsort(scores)[::-1]
             if item_inv.get(i) is not None and item_inv[i] not in tr_items
         ]
+        if top_k_store is not None:
+            top_k_store[uid] = ranked[:MAX_K]
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
@@ -665,6 +701,56 @@ def _expand_models(models: list[str] | None) -> set[str]:
     return expanded
 
 
+def compute_coverage(top_k_store: dict, catalog_size: int, k: int = MAX_K) -> tuple[float, int]:
+    """
+    % of the catalog that appears at least once across all users' top-K —
+    a low number flags a model that just recommends the same popular items
+    to everyone (a common failure mode especially for graph/CF models),
+    something Precision/Recall/NDCG (which score per-user relevance, not
+    the aggregate item distribution) don't surface at all.
+
+    Returns (coverage_fraction, n_unique_items_recommended).
+    """
+    if not top_k_store or catalog_size == 0:
+        return 0.0, 0
+    recommended_items = set()
+    for ranked in top_k_store.values():
+        recommended_items.update(ranked[:k])
+    return len(recommended_items) / catalog_size, len(recommended_items)
+
+
+def compute_segment_metrics(top_k_store: dict, test_rel: dict, train_counts: dict) -> dict:
+    """
+    Precision/Recall/NDCG@10, split by each user's TRAIN interaction count
+    into the same cold/light/heavy bands recommendation_router.py routes
+    on. Overall averages can hide a model that only works for heavy users
+    — this is the same concern the router's whole design is built around,
+    so it's worth measuring directly rather than asserting.
+    """
+    segment_results = {}
+    for label, lo, hi in INTERACTION_SEGMENTS:
+        per_metric = {"precision": [], "recall": [], "ndcg": []}
+        for uid, ranked in top_k_store.items():
+            count = train_counts.get(uid, 0)
+            if not (lo <= count < hi):
+                continue
+            relevant = test_rel.get(uid)
+            if not relevant:
+                continue
+            per_metric["precision"].append(precision_at_k(ranked, relevant, 10))
+            per_metric["recall"].append(recall_at_k(ranked, relevant, 10))
+            per_metric["ndcg"].append(ndcg_at_k(ranked, relevant, 10))
+
+        n = len(per_metric["precision"])
+        segment_results[label] = {
+            "n_users": n,
+            "P@10": float(np.mean(per_metric["precision"])) if n else "N/A",
+            "R@10": float(np.mean(per_metric["recall"])) if n else "N/A",
+            "NDCG@10": float(np.mean(per_metric["ndcg"])) if n else "N/A",
+        }
+    return segment_results
+
+
 def run_comparison(
     n_eval_users: int = N_EVAL_USERS,
     models: list[str] | None = None,
@@ -684,20 +770,33 @@ def run_comparison(
 
     selected_models = _expand_models(models)
     results = {}
+    top_k_stores: dict = {}
+
     if "content" in selected_models:
-        results["Content-Based (TF-IDF)"] = evaluate_content_based(train_df, test_df, eval_users)
+        top_k_stores["Content-Based (TF-IDF)"] = {}
+        results["Content-Based (TF-IDF)"] = evaluate_content_based(
+            train_df, test_df, eval_users, top_k_store=top_k_stores["Content-Based (TF-IDF)"]
+        )
     if "svd" in selected_models:
-        results["SVD"] = evaluate_svd(train_df, test_df, eval_users)
+        top_k_stores["SVD"] = {}
+        results["SVD"] = evaluate_svd(train_df, test_df, eval_users, top_k_store=top_k_stores["SVD"])
     if "lightfm_collab" in selected_models:
+        top_k_stores["LightFM Collab"] = {}
         results["LightFM Collab"] = evaluate_lightfm_collab(
-            train_df, test_df, eval_users, epochs=lightfm_epochs
+            train_df, test_df, eval_users, epochs=lightfm_epochs,
+            top_k_store=top_k_stores["LightFM Collab"],
         )
     if "lightfm_hybrid" in selected_models:
+        top_k_stores["LightFM Hybrid"] = {}
         results["LightFM Hybrid"] = evaluate_lightfm_hybrid(
-            train_df, test_df, eval_users, epochs=lightfm_epochs
+            train_df, test_df, eval_users, epochs=lightfm_epochs,
+            top_k_store=top_k_stores["LightFM Hybrid"],
         )
     if "lightgcn" in selected_models:
-        results["LightGCN"] = evaluate_lightgcn(train_df, test_df, eval_users)
+        top_k_stores["LightGCN"] = {}
+        results["LightGCN"] = evaluate_lightgcn(
+            train_df, test_df, eval_users, top_k_store=top_k_stores["LightGCN"]
+        )
 
     # Build comparison DataFrame
     col_order = (
@@ -720,6 +819,34 @@ def run_comparison(
     print("  МЕТРИКИ")
     print("=" * 72)
     print(df_str.to_string())
+
+    # Catalog coverage + performance-by-interaction-count segments: both
+    # computed from the same top_k_stores every model already filled in, no
+    # retraining needed. Coverage flags a model that just recommends
+    # popular items to everyone; segments flag a model whose good overall
+    # average hides poor performance for the very cold/light users
+    # recommendation_router.py has to route.
+    catalog_size = train_df["movie_id"].nunique()
+    test_rel_all = drop_unseen_test_items(
+        train_df, test_df, set(train_df["movie_id"].unique())
+    ).groupby("user_id")["movie_id"].apply(set).to_dict()
+    train_counts = train_df["user_id"].value_counts().to_dict()
+
+    print("\n" + "=" * 72)
+    print("  CATALOG COVERAGE (% of items ever recommended in top-{})".format(MAX_K))
+    print("=" * 72)
+    for name, store in top_k_stores.items():
+        coverage, n_unique = compute_coverage(store, catalog_size)
+        print(f"  {name:<24s} {coverage:.1%}  ({n_unique}/{catalog_size} items)")
+
+    print("\n" + "=" * 72)
+    print("  PERFORMANCE BY USER INTERACTION COUNT (cold/light/heavy)")
+    print("=" * 72)
+    for name, store in top_k_stores.items():
+        print(f"\n  {name}:")
+        segments = compute_segment_metrics(store, test_rel_all, train_counts)
+        seg_df = pd.DataFrame(segments).T
+        print("  " + seg_df.to_string().replace("\n", "\n  "))
 
     print("\n" + "=" * 72)
     print("  АНАЛИЗ ПРИГОДНОСТИ ДЛЯ ПРОДАКШЕНА")
