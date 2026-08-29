@@ -20,7 +20,10 @@ checked against the branch being run.
 |---:|---:|---:|---:|
 | 45K+ | 270K+ | 671 | 20+ |
 
-The project combines MovieLens interactions with The Movies Dataset (TMDB).
+The workflow combines MovieLens interactions with metadata from The Movies
+Dataset (TMDB), including movie, keyword, cast, crew, and identifier-link
+data. The identifier contract below uses the TMDB id as `movie_id` and
+retains the original MovieLens id for mapping where available.
 
 ## Cleaning the data
 
