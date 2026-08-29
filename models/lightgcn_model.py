@@ -233,7 +233,18 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
         user_embs, item_embs: обученные эмбеддинги
     """
     rng = np.random.RandomState(seed)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # weight_decay: LightFM regularizes via its own loss (item_alpha/user_alpha
+    # equivalents); LightGCN's Adam here had none, so add a small L2 penalty
+    # for comparable generalization pressure — cheap (one extra term per
+    # optimizer.step(), no extra forward/backward) and standard practice for
+    # graph embeddings, which can otherwise overfit high-degree nodes.
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    # Cosine decay over the fixed epoch budget: same epoch count, same
+    # compute per step, but later epochs take smaller, more precise steps
+    # instead of overshooting at a constant lr — standard practice for
+    # squeezing more out of a fixed number of epochs rather than adding more
+    # of them.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     model.to(device)
     edge_index = edge_index.to(device)
 
@@ -323,9 +334,10 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
 
         avg_loss = total_loss / n_batches if n_batches > 0 else 0
         losses_history.append(avg_loss)
+        scheduler.step()
 
         if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
+            print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
 
     # Финальное вычисление эмбеддингов без градиентов
     model.eval()

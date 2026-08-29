@@ -550,7 +550,11 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
 # Model 5: LightGCN
 # ---------------------------------------------------------------------------
 
-def evaluate_lightgcn(train_df, test_df, eval_users, top_k_store: dict | None = None):
+def evaluate_lightgcn(
+    train_df, test_df, eval_users,
+    top_k_store: dict | None = None,
+    loss_history_store: list | None = None,
+):
     print("\n[5/5] LightGCN (graph convolutional network, BPR loss)...")
     try:
         import torch
@@ -574,6 +578,11 @@ def evaluate_lightgcn(train_df, test_df, eval_users, top_k_store: dict | None = 
         prepare_lightgcn_data(train_gcn.copy(), min_user_interactions=0)
     )
 
+    # Seed torch before constructing the model: LightGCN.__init__ initializes
+    # embeddings via nn.init.normal_, which draws from torch's RNG. Seeding
+    # inside train_lightgcn would be too late — the model (and its random
+    # initial embeddings) is already built by the time train_lightgcn runs.
+    torch.manual_seed(RANDOM_SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = LightGCN(n_users=n_users, n_items=n_items, emb_dim=64, n_layers=3).to(device)
 
@@ -583,41 +592,56 @@ def evaluate_lightgcn(train_df, test_df, eval_users, top_k_store: dict | None = 
     # one LightFM epoch both mean "one pass over every positive interaction"
     # — deliberately equalized, not copy-pasted from LightFM's default.
     t0 = time.perf_counter()
-    user_embs, item_embs, _losses = train_lightgcn(
+    user_embs, item_embs, losses = train_lightgcn(
         model, edge_index, gt_dict, n_users, n_items,
         user_map, item_map, lr=0.001, epochs=10, batch_size=8192,
     )
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
-
-    user_embs = user_embs.detach().cpu().numpy()
-    item_embs = item_embs.detach().cpu().numpy()
+    if loss_history_store is not None:
+        loss_history_store[:] = losses
 
     test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
     test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
     per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
-    inf_times = []
 
-    for uid in eval_users:
-        if uid not in user_map:
-            continue
-        relevant = test_rel.get(uid)
-        if not relevant:
-            continue
+    # Batched scoring + torch.topk instead of a per-user Python loop with a
+    # full argsort over all n_items: one matmul over every eval user at
+    # once, then only the top candidates (not the whole catalog) come back
+    # to CPU for the exclusion-filtering/metric step below.
+    valid_uids = [uid for uid in eval_users if uid in user_map and test_rel.get(uid)]
+    if not valid_uids:
+        result: dict = {f"P@{k}": 0.0 for k in K_VALUES}
+        result |= {f"R@{k}": 0.0 for k in K_VALUES}
+        result |= {f"NDCG@{k}": 0.0 for k in K_VALUES}
+        result["Infer ms"] = "N/A"
+        result["Train s"] = train_time
+        return result
 
-        u_idx = user_map[uid]
-        u_emb = user_embs[u_idx]
+    u_indices = torch.tensor([user_map[uid] for uid in valid_uids], device=device)
+    batch_user_embs = user_embs[u_indices]  # (n_valid_users, emb_dim)
 
-        t0 = time.perf_counter()
-        scores = item_embs @ u_emb
-        inf_times.append(time.perf_counter() - t0)
+    # Buffer size guarantees at least MAX_K candidates survive exclusion of
+    # each user's own train items — the same guarantee a full sort gave,
+    # without actually sorting the whole catalog per user.
+    max_train_count = max((len(train_sets.get(uid, set())) for uid in valid_uids), default=0)
+    topk_buffer = min(n_items, MAX_K + max_train_count)
 
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        all_scores = batch_user_embs @ item_embs.T  # (n_valid_users, n_items)
+        _, top_indices = torch.topk(all_scores, k=topk_buffer, dim=1)
+    inf_time_total = time.perf_counter() - t0
+    top_indices = top_indices.cpu().numpy()
+
+    for row, uid in enumerate(valid_uids):
+        relevant = test_rel[uid]
         tr_items = train_sets.get(uid, set())
         ranked = [
             item_inv[i]
-            for i in np.argsort(scores)[::-1]
+            for i in top_indices[row]
             if item_inv.get(i) is not None and item_inv[i] not in tr_items
         ]
         if top_k_store is not None:
@@ -633,7 +657,11 @@ def evaluate_lightgcn(train_df, test_df, eval_users, top_k_store: dict | None = 
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
-    result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
+    # Infer ms is now the amortized per-user cost of one batched matmul +
+    # topk over all eval users, not a separately timed single-vector matmul
+    # per user (that per-user loop was the thing being vectorized away) —
+    # arguably closer to what a real batched-serving deployment would see.
+    result["Infer ms"] = (inf_time_total / len(valid_uids)) * 1000
     result["Train s"] = train_time
     return result
 
@@ -792,10 +820,13 @@ def run_comparison(
             train_df, test_df, eval_users, epochs=lightfm_epochs,
             top_k_store=top_k_stores["LightFM Hybrid"],
         )
+    lightgcn_loss_history: list = []
     if "lightgcn" in selected_models:
         top_k_stores["LightGCN"] = {}
         results["LightGCN"] = evaluate_lightgcn(
-            train_df, test_df, eval_users, top_k_store=top_k_stores["LightGCN"]
+            train_df, test_df, eval_users,
+            top_k_store=top_k_stores["LightGCN"],
+            loss_history_store=lightgcn_loss_history,
         )
 
     # Build comparison DataFrame
@@ -819,6 +850,20 @@ def run_comparison(
     print("  МЕТРИКИ")
     print("=" * 72)
     print(df_str.to_string())
+
+    if lightgcn_loss_history:
+        print("\n" + "=" * 72)
+        print("  LIGHTGCN LOSS CURVE (BPR loss, per epoch)")
+        print("=" * 72)
+        curve = ", ".join(f"{v:.4f}" for v in lightgcn_loss_history)
+        print(f"  {curve}")
+        if len(lightgcn_loss_history) >= 2:
+            delta = lightgcn_loss_history[-2] - lightgcn_loss_history[-1]
+            print(
+                f"  Last-epoch improvement: {delta:.4f} "
+                f"({'still declining' if delta > 1e-4 else 'plateaued'} "
+                "— see RESULTS.md before treating epochs=10 as final)"
+            )
 
     # Catalog coverage + performance-by-interaction-count segments: both
     # computed from the same top_k_stores every model already filled in, no
