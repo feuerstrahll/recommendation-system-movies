@@ -137,20 +137,20 @@ Metric implementations: `evaluation/metrics.py`.
 
 ## Results
 
-<!-- TODO: fill in after the next full evaluation run on GPU. -->
-
 | Model | P@10 | R@10 | NDCG@10 | Train time |
-|---|---|---|---|---|
-| Content-Based (TF-IDF) | TBD | TBD | TBD | TBD |
-| SVD | TBD | TBD | TBD | TBD |
-| LightFM Collaborative | TBD | TBD | TBD | TBD |
-| LightFM Hybrid | TBD | TBD | TBD | TBD |
-| LightGCN | TBD | TBD | TBD | TBD |
+|---|---:|---:|---:|---:|
+| Content-Based (TF-IDF) | 0.0030 | 0.0050 | 0.0037 | 0.0s |
+| SVD | 0.1387 | **0.1766** | 0.2137 | **4.2s** |
+| **LightFM Collab** | **0.1490** | 0.1760 | **0.2178** | 36.3s |
+| LightFM Hybrid | 0.1440 | 0.1652 | 0.2038 | 99.9s |
+| LightGCN | 0.1133 | 0.1393 | 0.1592 | 3310.7s |
 
-Full metrics (P@10/20, R@10/20, NDCG@10/20, inference latency) and the
-production-fit analysis (cold-start handling, scalability, real-time
-serving, update cost) are printed by `evaluation/compare_models.py` and
-discussed in [models/README.md](models/README.md).
+LightFM Collaborative wins on ranking accuracy; SVD is within 2% of it at a
+fraction of the training/inference cost. Full metrics (P@10/20, R@10/20,
+NDCG@10/20, inference latency), methodology, discussion of the LightGCN and
+LightFM Hybrid numbers, a production-fit table, and known limitations of
+this run: **[RESULTS.md](RESULTS.md)**. Raw per-run numbers:
+[results/metrics.csv](results/metrics.csv).
 
 ## Demo & Screenshots
 
