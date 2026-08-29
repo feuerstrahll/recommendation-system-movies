@@ -24,8 +24,6 @@ The project combines MovieLens interactions with The Movies Dataset (TMDB).
 
 ## Cleaning the data
 
-From `recommendation-system-lab5/`:
-
 ```powershell
 python database/clean_movies_data.py
 ```

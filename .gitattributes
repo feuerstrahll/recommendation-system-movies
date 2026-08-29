@@ -1,1 +1,1 @@
-recommendation-system-lab5/data/processed/*.csv filter=lfs diff=lfs merge=lfs -text
+data/processed/*.csv filter=lfs diff=lfs merge=lfs -text

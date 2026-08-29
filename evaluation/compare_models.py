@@ -29,7 +29,6 @@ no rating scale left to normalize scores against, so a rating-prediction
 error metric isn't meaningful for any of the models here anymore.
 
 Usage:
-  cd recommendation-system-lab5
   python evaluation/compare_models.py
 """
 

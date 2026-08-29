@@ -1,7 +1,7 @@
 -- ============================================================
 -- Movies Dataset PostgreSQL schema
 -- Compatible with CSV files produced by:
---   lab-5/recommendation-system-lab5/database/clean_movies_data.py
+--   lab-5/database/clean_movies_data.py
 --
 -- Main processed files:
 --   movies.csv

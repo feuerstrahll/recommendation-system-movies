@@ -1,34 +1,90 @@
 # Movie Recommendation System
 
-Lab 5: comparing recommendation approaches on a movie dataset and choosing
-a strategy for production use.
+Movie dataset preparation, a PostgreSQL/SQLite schema, and four recommendation
+approaches (content-based, SVD, LightFM, LightGCN) built on
+[The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset).
 
-The active project lives in
-[`recommendation-system-lab5/`](recommendation-system-lab5/) — start there.
-It contains the data pipeline (raw → cleaned CSVs → PostgreSQL/SQLite),
-four recommendation models, a cold-start router, and unified evaluation.
-See [`recommendation-system-lab5/README.md`](recommendation-system-lab5/README.md)
-for setup and usage.
+This branch (`feature/dev`) holds active development: model implementations,
+database tooling, evaluation, and a Streamlit UI. The `main` branch holds an
+earlier baseline (SVD + FAISS hybrid recommender) and is kept as-is.
 
-## Lab requirements coverage
+## Structure
 
-| # | Requirement | Status |
+```
+app.py          Streamlit UI — login/profile, search, and all four recommendation strategies
+data/           check.py, dataloader.py — local data utilities (raw/processed CSVs are not committed)
+database/       schema, cleaning script, integrity checks, ER diagram — see database/README.MD
+etl/            etl_pipeline.py — loads processed CSVs into database/recommender.db (SQLite)
+models/         4 recommendation models + cold-start questionnaire + router — see models/README.md
+evaluation/     shared metrics (Precision@K, Recall@K, NDCG@K) + evaluation/compare_models.py
+UI_screens/     screenshots of the Streamlit app (auth, search, cold start, collaborative, hybrid)
+docs/demo/      exported standalone HTML builds of the UI
+```
+
+## Data contract
+
+Movie identity across the whole project is the TMDB id:
+
+```text
+movies.movie_id  = TMDB id
+ratings.movie_id = TMDB id
+ratings.movielens_id = original MovieLens movieId (kept for traceability only)
+```
+
+See [database/database_architecture.md](database/database_architecture.md) for the full table layout.
+
+## Setup
+
+```powershell
+pip install -r requirements.txt
+```
+
+`requirements.txt` covers the classic stack (pandas, scikit-learn, LightFM,
+Streamlit) plus PyTorch + PyTorch Geometric for LightGCN.
+
+## Data preparation
+
+```powershell
+python database/clean_movies_data.py --input data/raw --output data/processed
+```
+
+Reads the raw Movies Dataset CSVs (`movies_metadata.csv`, `credits.csv`,
+`keywords.csv`, `ratings.csv`, `links.csv`) and writes the cleaned,
+TMDB-keyed CSVs consumed by every model and by the SQL schema.
+
+## Models
+
+Four approaches live in `models/`, meant to be compared rather than picked
+as a single "winner":
+
+| Model | File | Approach |
 |---|---|---|
-| 1 | Theory: content-based, collaborative, LightFM, GNN | Covered — see `models/README.md` |
-| 2 | Dataset: users, items, interactions, metadata | Covered — see `database/database_architecture.md` |
-| 3 | Implement 4 model types | Covered — content-based, LightFM (collaborative), LightFM (hybrid), LightGCN, all in `models/` |
-| 4 | Evaluation: Precision@K, Recall@K, NDCG@K, RMSE | Covered — `evaluation/compare_models.py` runs all four models on one split and reports ranking metrics for all of them plus RMSE/MAE for the two LightFM variants |
-| 5 | Production-fit analysis (quality, speed, scalability, real-time, update cost) | Partial — training/inference speed and update cost are discussed per-model in `models/README.md`; no load-testing or scalability benchmarks exist |
-| 6 | Model selection + UI integration | Partial — routing logic (`models/recommendation_router.py`) picks a strategy per user; `docs/demo/` holds exported HTML UI mockups, not a live backend-connected app |
+| Content-Based | `models/content_based.py` | SentenceTransformer embeddings over title + genres + year, cosine similarity / FAISS |
+| SVD | `models/svd_model.py` | Classic matrix factorization (scipy truncated SVD) |
+| LightFM | `models/lightfm_model.py` | Factorization machines, WARP loss, interaction data only |
+| LightGCN | `models/lightgcn_model.py` | Graph convolution over the user-item bipartite graph, BPR loss |
 
-`FULL_LAB_STATUS.py` in this folder is an earlier, now partly outdated
-self-check script — it predates `evaluation/compare_models.py` and lists
-RMSE support as missing, which is no longer accurate.
+Cold-start users are handled separately by `models/cold_start_questionnaire.py`
+and routed through the lifecycle stages (new → cold start → warm start →
+mature) in `models/recommendation_router.py`. Details, parameters, and
+recorded results: [models/README.md](models/README.md).
 
-## Repository layout
+## Evaluation
 
+```powershell
+python evaluation/compare_models.py
 ```
-README.md                       this file
-recommendation-system-lab5/     active project — see its own README.md
-movie-recommendation-system.html  standalone UI export (superseded by docs/demo/ inside the project folder)
-```
+
+Runs Content-Based, SVD, LightFM, and LightGCN on the exact same
+preprocessed data (implicit interactions, rating >= 4.0, 80/20 split per
+user) and reports Precision@K, Recall@K, NDCG@K for K = 10, 20 — the same
+protocol every model's own script uses standalone, so results are directly
+comparable. Metric implementations: `evaluation/metrics.py`.
+
+Details and the shared protocol: [models/README.md](models/README.md).
+
+## Demo
+
+`docs/demo/` contains exported standalone HTML builds of the UI
+(`movie-recommendation-system.html` and a compressed variant). Screenshots
+of the live Streamlit app are in `UI_screens/`.

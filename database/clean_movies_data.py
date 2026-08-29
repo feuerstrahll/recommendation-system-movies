@@ -329,8 +329,8 @@ def build_final_datasets(
 
 def main():
     parser = argparse.ArgumentParser(description="Очистка Movies Dataset")
-    parser.add_argument("--input", default="./recommendation-system-lab5/data/raw", help="Папка с исходными CSV")
-    parser.add_argument("--output", default="./recommendation-system-lab5/data/processed", help="Папка для очищенных CSV")
+    parser.add_argument("--input", default="./data/raw", help="Папка с исходными CSV")
+    parser.add_argument("--output", default="./data/processed", help="Папка для очищенных CSV")
     args = parser.parse_args()
 
     inp = Path(args.input)
