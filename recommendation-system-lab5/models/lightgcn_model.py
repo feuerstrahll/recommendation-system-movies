@@ -159,12 +159,12 @@ class LightGCN(nn.Module):
 # 3. ОБУЧЕНИЕ (BPR Loss + Negative Sampling)
 # ==========================================================
 
-def train_lightgcn(model, edge_index, gt_dict, n_users, n_items, 
+def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
                    user_map, item_map,
-                   lr=0.001, epochs=20, batch_size=1024, neg_samples=1):
+                   lr=0.001, epochs=20, batch_size=1024, neg_samples=1, seed=42):
     """
     Обучение LightGCN с BPR (Bayesian Personalized Ranking) loss.
-    
+
     Args:
         model: LightGCN модель
         edge_index: граф
@@ -175,17 +175,19 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
         epochs: количество эпох
         batch_size: размер батча
         neg_samples: количество негативных сэмплов
-    
+        seed: seed для локального RNG (positive/negative sampling), для воспроизводимости
+
     Returns:
         user_embs, item_embs: обученные эмбеддинги
     """
+    rng = np.random.RandomState(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     model.to(device)
     edge_index = edge_index.to(device)
-    
+
     # Собираем валидные пользователи с positive items (сразу в виде эмбеддинг-индексов)
     all_users_mapped = []
-    all_pos = []          # оригинальные item id, нужны для np.random.choice ниже
+    all_pos = []          # оригинальные item id, нужны для rng.choice ниже
     all_pos_idx_sets = [] # те же позитивы, но как set индексов эмбеддингов — для фильтрации негативов
 
     for u_original_id in gt_dict.keys():
@@ -196,78 +198,81 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
             all_users_mapped.append(u_original_id)
             all_pos.append(pos_ids)
             all_pos_idx_sets.append({item_map[i] for i in pos_ids})
-    
+
     model.train()
     losses_history = []
-    
+
     for epoch in range(epochs):
+        optimizer.zero_grad()
+
+        # Один forward графа на эпоху: граф-свёртка — самая дорогая операция
+        # (torch.sparse.mm по всему графу), и параметры не меняются внутри эпохи,
+        # поэтому пересчитывать её на каждый mini-batch бессмысленно.
+        user_embs, item_embs = model(edge_index)
+
+        # Сэмплируем по одной (user, pos, neg) тройке на каждого пользователя за эпоху
+        u_idx_list = [user_map[u] for u in all_users_mapped]
+        pos_items = [rng.choice(all_pos[i]) for i in range(len(all_users_mapped))]
+        pos_idx_list = [item_map[i] for i in pos_items]
+
+        neg_idx_list = []
+        for i in range(len(all_users_mapped)):
+            pos_idx_set = all_pos_idx_sets[i]
+            while True:
+                candidate = rng.randint(0, n_items)
+                if candidate not in pos_idx_set:
+                    neg_idx_list.append(candidate)
+                    break
+
+        u_idx = torch.tensor(u_idx_list, device=device)
+        pos_idx = torch.tensor(pos_idx_list, device=device)
+        neg_idx = torch.tensor(neg_idx_list, device=device)
+
+        # BPR loss считается батчами ТОЛЬКО по уже посчитанным эмбеддингам —
+        # без повторного forward графа, батчинг здесь только ради экономии памяти
         total_loss = 0.0
         n_batches = 0
-        
         pbar = tqdm(
-            range(0, len(all_users_mapped), batch_size),
+            range(0, len(u_idx), batch_size),
             desc=f"Epoch {epoch+1}/{epochs}",
             leave=False
         )
-        
+        losses = []
         for start in pbar:
-            optimizer.zero_grad()
-            
-            user_embs, item_embs = model(edge_index)
-            
-            end = min(start + batch_size, len(all_users_mapped))
-            u_batch = all_users_mapped[start:end]
-            
-            # Маппируем пользователей
-            u_idx = torch.tensor([user_map[u] for u in u_batch], device=device)
-            
-            # Positive items (случайно выбираем из известных)
-            pos_items = []
-            for i in range(len(u_batch)):
-                pos_items.append(np.random.choice(all_pos[start + i]))
-            pos_idx = torch.tensor([item_map[i] for i in pos_items], device=device)
-            
-            # Negative items (случайно из всех фильмов, кроме уже известных позитивов пользователя)
-            neg_items_idx = []
-            for i in range(len(u_batch)):
-                pos_idx_set = all_pos_idx_sets[start + i]
-                while True:
-                    candidate = np.random.randint(0, n_items)
-                    if candidate not in pos_idx_set:
-                        neg_items_idx.append(candidate)
-                        break
-            neg_idx = torch.tensor(neg_items_idx, device=device)
-            
-            # Вычисляем скалярные произведения (scores)
-            u_emb = user_embs[u_idx]
-            pos_emb = item_embs[pos_idx]
-            neg_emb = item_embs[neg_idx]
-            
+            end = min(start + batch_size, len(u_idx))
+
+            u_emb = user_embs[u_idx[start:end]]
+            pos_emb = item_embs[pos_idx[start:end]]
+            neg_emb = item_embs[neg_idx[start:end]]
+
             pos_scores = (u_emb * pos_emb).sum(dim=1)
             neg_scores = (u_emb * neg_emb).sum(dim=1)
-            
-            # BPR Loss: log-sigmoid(pos - neg)
+
             batch_loss = -F.logsigmoid(pos_scores - neg_scores).mean()
-            
-            batch_loss.backward()
-            optimizer.step()
-            
+            losses.append(batch_loss)
+
             total_loss += batch_loss.item()
             n_batches += 1
-            
             pbar.set_postfix({'loss': f'{batch_loss.item():.4f}'})
-        
+
+        # Один backward/optimizer.step() на эпоху — суммируем batch-loss'ы
+        # в единый граф вычислений, чтобы градиенты корректно накапливались
+        # по всем сэмплам эпохи от общего forward-прохода.
+        epoch_loss = torch.stack(losses).mean()
+        epoch_loss.backward()
+        optimizer.step()
+
         avg_loss = total_loss / n_batches if n_batches > 0 else 0
         losses_history.append(avg_loss)
-        
+
         if (epoch + 1) % 5 == 0 or epoch == 0:
             print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
-    
+
     # Финальное вычисление эмбеддингов без градиентов
     model.eval()
     with torch.no_grad():
         user_embs, item_embs = model(edge_index)
-    
+
     return user_embs, item_embs, losses_history
 
 
@@ -423,8 +428,15 @@ def main():
     edge_index, n_users, n_items, user_inv, item_inv, train_gt_dict, user_map, item_map = \
         prepare_lightgcn_data(train_df, min_user_interactions=0)
 
-    # Ground truth для оценки — это TEST-взаимодействия (held-out), а не train
-    test_gt_dict = test_df.groupby('userId')['movieId'].apply(list).to_dict()
+    # Ground truth для оценки — это TEST-взаимодействия (held-out), а не train.
+    # Фильмы, которых не было в train, не имеют item embedding и физически не могут
+    # быть рекомендованы (cold-start item) — такие test-взаимодействия исключаем явно,
+    # иначе они искусственно занижают Recall/NDCG независимо от качества модели.
+    test_df_known_items = test_df[test_df['movieId'].isin(item_map.keys())]
+    n_dropped = len(test_df) - len(test_df_known_items)
+    if n_dropped > 0:
+        print(f"⚠️  Dropped {n_dropped} test interactions on items unseen in train (cold-start items)")
+    test_gt_dict = test_df_known_items.groupby('userId')['movieId'].apply(list).to_dict()
 
     # Инициализация модели
     print("\n🏗️  Building LightGCN model...")
@@ -448,7 +460,8 @@ def main():
         item_map,
         lr=0.001,
         epochs=20,
-        batch_size=1024
+        batch_size=1024,
+        seed=42
     )
 
     # Оценка на held-out test-взаимодействиях; seen_items=train_gt_dict исключает
