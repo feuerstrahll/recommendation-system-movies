@@ -99,9 +99,15 @@ functions to compare all three (plus content-based) on one shared split:
 
 - `prepare_lightgcn_data()` — builds the user-item bipartite graph from ratings.
 - `LightGCN` — the model: K graph-convolution layers, embeddings averaged across layers.
-- `train_lightgcn()` — BPR loss with negative sampling; graph propagation runs once
-  per epoch (not once per mini-batch), with BPR loss computed in batches only to
-  bound memory, and one `backward()`/`optimizer.step()` per epoch.
+- `train_lightgcn()` — BPR loss with negative sampling. Negatives are sampled
+  for every positive interaction of every user each epoch (not one triple per
+  user), so training exposure per epoch scales with interaction count, the
+  same way LightFM's epoch (one WARP pass over every positive) does — the two
+  models' `epochs=` values are directly comparable. `optimizer.step()` runs
+  once per mini-batch (not once per epoch), with the graph forward pass
+  recomputed each batch since parameters change after every step; the
+  normalized adjacency matrix is cached and coalesced once per training run
+  since it depends only on graph structure, not on the changing embeddings.
 - `evaluate_model()` — Precision@K, Recall@K, NDCG@K on held-out data.
 
 Default parameters (in `main()`): `emb_dim=64`, `n_layers=3`, `lr=0.001`,
@@ -109,19 +115,15 @@ Default parameters (in `main()`): `emb_dim=64`, `n_layers=3`, `lr=0.001`,
 `torch-geometric>=2.3.0` (in `requirements.txt`); install with:
 
 ```powershell
-install_lightgcn_deps.bat
+pip install -r requirements.txt
 ```
 
-or manually:
+For a CPU-only PyTorch build (no local GPU), install torch explicitly first:
 
 ```powershell
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install torch_geometric tqdm
+pip install -r requirements.txt
 ```
-
-Runnable usage examples (basic run, single-user recommendations, comparison
-against LightFM, embedding inspection) are in `lightgcn_examples.py` at the
-repo root.
 
 ## Recorded results
 
