@@ -1,163 +1,179 @@
 # Movie Recommendation System
 
-Course project exploring recommendation approaches for movies using MovieLens
-ratings and movie metadata.
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Documentation scope
+Movie dataset preparation, a PostgreSQL/SQLite schema, and four recommendation
+approaches (content-based, SVD, LightFM, LightGCN) built on
+[The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset).
 
-This documentation follows the sources actually used for the recommendation
-work. It does not treat the entire `feature/dev` branch as the project baseline.
+This branch (`feature/dev`) holds active development: model implementations,
+database tooling, evaluation, and a Streamlit UI. The `main` branch holds an
+earlier baseline (SVD + FAISS hybrid recommender) and is kept as-is.
 
-| Area | Source used | Role |
-|---|---|---|
-| Recommendation models | [`main/models`](https://github.com/feuerstrahll/recommendation-system-movies/tree/main/models) | Primary source for the model experiments and scripts |
-| Cold-start questionnaire | [`feature/dev/.../cold_start_questionnaire.py`](https://github.com/feuerstrahll/recommendation-system-movies/blob/feature/dev/recommendation-system-lab5/models/cold_start_questionnaire.py) | Supplemental onboarding component for users without rating history |
+## Table of Contents
 
-The `feature/dev` branch also contains other experimental files. Their presence
-does not mean that they were used as the primary implementation, integrated
-with the `main` models, or validated for deployment.
+- [Structure](#structure)
+- [Architecture](#architecture)
+- [Data Contract](#data-contract)
+- [Setup](#setup)
+- [Data Preparation](#data-preparation)
+- [Models](#models)
+- [Evaluation](#evaluation)
+- [Results](#results)
+- [Demo & Screenshots](#demo--screenshots)
+- [Future Work](#future-work)
+- [License](#license)
 
-## Dataset summary
+## Structure
 
-The presentation records the following project data:
-
-| Movies | Ratings | MovieLens users | Features per movie |
-|---:|---:|---:|---:|
-| 45K+ | 270K+ | 671 | 20+ |
-
-The workflow combines MovieLens interactions with metadata from The Movies
-Dataset (TMDB), including movie, keyword, cast, crew, and identifier-link data.
-The documented identifier contract uses the TMDB id as `movie_id` and retains
-the original MovieLens id for mapping where available.
-
-## Recommendation components
-
-The primary model work in `main/models` includes:
-
-- `content_lightFM.py` — a content-oriented LightFM experiment using movie
-  titles, genres, and release year;
-- `lightfm_model.py` — a collaborative LightFM experiment using user–movie
-  interactions;
-- `model_creation.ipynb` — exploratory work with SVD, nearest-neighbour methods,
-  sentence embeddings, and FAISS;
-- `lightfm_roc_curve.png` — an evaluation artifact from a previous run.
-
-The cold-start questionnaire from `feature/dev` collects genre preferences,
-favorite movies, and a release-period preference. It then creates initial
-content-based recommendations for a new user.
-
-## Status
-
-| Component | Repository evidence | Documentation status |
-|---|---|---|
-| Content-oriented LightFM | Script in `main/models` | Source available; rerun locally before reporting results |
-| Collaborative LightFM | Script in `main/models` | Source available; rerun locally before reporting results |
-| SVD and FAISS exploration | Notebook in `main/models` | Experimental notebook, not presented as a production pipeline |
-| Cold-start questionnaire | Module in `feature/dev` | Supplemental component; integration with the `main` models is not asserted |
-
-This project documentation does not claim production readiness, guaranteed
-performance, complete branch integration, or a deployed backend. Model quality
-and runtime depend on the data snapshot, preprocessing, split, hardware,
-dependency versions, and random seed.
-
-## Recorded project metrics
-
-The following values are preserved from the supplied presentation and describe
-the project's recorded runs.
-
-**LightFM**
-
-- ROC AUC: **0.7277** on the documented 500-user sample;
-- training time: approximately **30 seconds**;
-- inference time: approximately **1 second**.
-
-**LightGCN** — documented run with 610 evaluated users, CPU, and 20 epochs:
-
-| Metric | K = 10 | K = 20 |
-|---|---:|---:|
-| Precision@K | 0.0324 | 0.0198 |
-| Recall@K | 0.0652 | 0.0823 |
-| NDCG@K | 0.0421 | 0.0527 |
-
-The presentation also records these indicative stage timings:
-
-| Stage | Recorded time |
-|---|---:|
-| Questionnaire | 2–5 min, interactive |
-| Content-based | <0.1 s |
-| Hybrid | ~0.5 s |
-| Collaborative | ~1 s |
-
-These are relevant project results, but they are not universal guarantees or
-service-level objectives. Reproduce them under a documented environment before
-using them for an external comparison.
-
-## Project comparison
-
-The presentation's qualitative assessment is retained below. “Proposed role”
-describes the project's design decision, not a claim that a production service
-was deployed.
-
-| Criterion | Content-Based | LightFM (Collaborative) | Hybrid | LightGCN |
-|---|---|---|---|---|
-| Quality for a mature user | Medium | High | High | High |
-| Cold start | Excellent | Does not address it alone | Partial | Does not address it alone |
-| Training speed | Seconds | ~30 s | Minutes | 1–3 min on CPU |
-| Inference speed | <0.1 s | ~1 s | ~0.5 s | 1–3 s |
-| Scalability assessment | FAISS-based | Good | Medium | GPU considered |
-| Real-time update assessment | Yes | Retraining | Partial | Retraining |
-| Explainability | High | Medium | Medium | Low |
-| Proposed role | Cold start | Primary | Warm start | Experiment |
-
-## Repository layout relevant to this documentation
-
-```text
-recommendation-system-movies/
-├── models/                                  # main branch: primary model work
-│   ├── content_lightFM.py
-│   ├── lightfm_model.py
-│   ├── model_creation.ipynb
-│   ├── lightfm_roc_curve.png
-│   └── README.md
-└── recommendation-system-lab5/
-    └── models/
-        └── cold_start_questionnaire.py      # feature/dev: supplemental source
+```
+app.py          Streamlit UI — login/profile, search, and all four recommendation strategies
+data/           check.py, dataloader.py — local data utilities (raw/processed CSVs are not committed)
+database/       schema, cleaning script, integrity checks, ER diagram — see database/README.MD
+etl/            etl_pipeline.py — loads processed CSVs into database/recommender.db (SQLite)
+models/         4 recommendation models + cold-start questionnaire + router — see models/README.md
+evaluation/     shared metrics (Precision@K, Recall@K, NDCG@K) + evaluation/compare_models.py
+UI_screens/     screenshots of the Streamlit app (auth, search, cold start, collaborative, hybrid)
+docs/demo/      exported standalone HTML builds of the UI
 ```
 
-The two locations are shown together to document provenance. They are not
-represented as one already-integrated directory.
+## Architecture
 
-## Working with the code
+```
+Raw Movies Dataset (Kaggle)
+        │
+        ▼
+database/clean_movies_data.py  ──▶  data/processed/*.csv  (TMDB-keyed)
+        │
+        ▼
+etl/etl_pipeline.py  ──▶  database/recommender.db (SQLite) / PostgreSQL (database/schema.sql)
+        │
+        ▼
+   models/  ──┬── content_based.py     (TF-IDF / SentenceTransformer + FAISS)
+              ├── svd_model.py         (truncated SVD)
+              ├── lightfm_model.py     (factorization machines, WARP loss)
+              └── lightgcn_model.py    (graph convolution, BPR loss)
+        │
+        ├──▶ evaluation/compare_models.py  ──▶  Precision@K / Recall@K / NDCG@K
+        │
+        └──▶ models/recommendation_router.py  ──▶  app.py (Streamlit UI)
+```
 
-1. Clone the repository and start from `main`.
-2. Run model experiments from `main/models` with the data paths expected by the
-   selected script or notebook.
-3. If the cold-start questionnaire is needed, review the version in
-   `feature/dev` and integrate it deliberately rather than copying the whole
-   branch.
-4. Record the dataset version, preprocessing steps, train/test split, random
-   seed, dependency versions, and hardware when reporting results.
+New users are routed by rating count — new → cold start → warm start → mature
+— through [`models/recommendation_router.py`](models/recommendation_router.py),
+which picks a strategy per lifecycle stage. See
+[models/README.md](models/README.md) for the full routing table.
 
-Before running the code, inspect each file's imports and data paths. The
-repository contains experimental code, so local path or schema adjustments may
-be required.
+## Data Contract
 
-## Evaluation guidance
+Movie identity across the whole project is the TMDB id:
 
-Treat committed charts, notebook output, and console logs as historical
-artifacts from relevant project runs. For a reproducible comparison:
+```text
+movies.movie_id  = TMDB id
+ratings.movie_id = TMDB id
+ratings.movielens_id = original MovieLens movieId (kept for traceability only)
+```
 
-- use the same cleaned data and identifier mapping for every model;
-- use a documented train/test split;
-- exclude training interactions from evaluation candidates;
-- report ranking metrics such as Precision@K, Recall@K, and NDCG@K under the
-  same protocol;
-- distinguish observed measurements from estimates or design targets.
+See [database/database_architecture.md](database/database_architecture.md) for the full table layout.
 
+## Setup
 
-## Contributing
+```powershell
+pip install -r requirements.txt
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for a branch-aware workflow.
+`requirements.txt` covers the classic stack (pandas, scikit-learn, LightFM,
+Streamlit) plus PyTorch + PyTorch Geometric for LightGCN.
+
+## Data Preparation
+
+```powershell
+python database/clean_movies_data.py --input data/raw --output data/processed
+```
+
+Reads the raw Movies Dataset CSVs (`movies_metadata.csv`, `credits.csv`,
+`keywords.csv`, `ratings.csv`, `links.csv`) and writes the cleaned,
+TMDB-keyed CSVs consumed by every model and by the SQL schema.
+
+## Models
+
+Four approaches live in `models/`, meant to be compared rather than picked
+as a single "winner":
+
+| Model | File | Approach |
+|---|---|---|
+| Content-Based | `models/content_based.py` | SentenceTransformer embeddings over title + genres + year, cosine similarity / FAISS |
+| SVD | `models/svd_model.py` | Classic matrix factorization (scipy truncated SVD) |
+| LightFM | `models/lightfm_model.py` | Factorization machines, WARP loss, interaction data only |
+| LightGCN | `models/lightgcn_model.py` | Graph convolution over the user-item bipartite graph, BPR loss |
+
+`evaluation/compare_models.py` additionally benchmarks a lightweight
+TF-IDF content-based baseline and a LightFM + item-features hybrid variant
+alongside these four — see [Evaluation](#evaluation) below.
+
+Cold-start users are handled separately by `models/cold_start_questionnaire.py`
+and routed through the lifecycle stages (new → cold start → warm start →
+mature) in `models/recommendation_router.py`. Details, parameters, and
+recorded results: [models/README.md](models/README.md).
+
+## Evaluation
+
+```powershell
+python evaluation/compare_models.py
+```
+
+Runs Content-Based (TF-IDF), SVD, LightFM Collaborative, LightFM Hybrid, and
+LightGCN on the exact same preprocessed data (implicit interactions, rating
+>= 4.0, 80/20 split per user) and reports Precision@K, Recall@K, NDCG@K for
+K = 10, 20. Training exposure per epoch is equalized across models — see
+[models/README.md](models/README.md) for the full protocol and methodology
+notes (how LightGCN's epoch budget was aligned with LightFM's, and why the
+benchmarked "Content-Based (TF-IDF)" differs from `models/content_based.py`).
+
+Metric implementations: `evaluation/metrics.py`.
+
+## Results
+
+<!-- TODO: fill in after the next full evaluation run on GPU. -->
+
+| Model | P@10 | R@10 | NDCG@10 | Train time |
+|---|---|---|---|---|
+| Content-Based (TF-IDF) | TBD | TBD | TBD | TBD |
+| SVD | TBD | TBD | TBD | TBD |
+| LightFM Collaborative | TBD | TBD | TBD | TBD |
+| LightFM Hybrid | TBD | TBD | TBD | TBD |
+| LightGCN | TBD | TBD | TBD | TBD |
+
+Full metrics (P@10/20, R@10/20, NDCG@10/20, inference latency) and the
+production-fit analysis (cold-start handling, scalability, real-time
+serving, update cost) are printed by `evaluation/compare_models.py` and
+discussed in [models/README.md](models/README.md).
+
+## Demo & Screenshots
+
+`docs/demo/` contains exported standalone HTML builds of the UI
+(`movie-recommendation-system.html` and a compressed variant).
+
+| | |
+|---|---|
+| ![Login](UI_screens/login.png) Login | ![Search](UI_screens/search.png) Search |
+| ![Cold start](UI_screens/coldStart.png) Cold-start questionnaire | ![Collaborative](UI_screens/collab_sys.png) Collaborative recommendations |
+| ![Hybrid](UI_screens/hybridSys1.png) Hybrid recommendations | ![Personal account](UI_screens/personal_acc.png) Personal account / rating history |
+
+More screenshots (auth flow, content-based results, before/after
+collaborative filtering comparisons) are in [UI_screens/](UI_screens/).
+
+## Future Work
+
+- Load-testing and scalability benchmarks for the production-fit analysis
+  (currently qualitative only — see `models/README.md`)
+- Wire the SentenceTransformer + FAISS content engine (`models/content_based.py`)
+  into `evaluation/compare_models.py` for a stronger content-based baseline
+- Hyperparameter tuning pass for LightGCN and LightFM Hybrid beyond the
+  current fixed configuration
 
 ## Data sources
 
@@ -167,3 +183,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for a branch-aware workflow.
 Review the terms and licensing of the code, datasets, and third-party
 dependencies before redistribution or deployment. This documentation package
 does not introduce a software license.
+
+## License
+
+[MIT](LICENSE)

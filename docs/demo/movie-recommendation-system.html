@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Movie Recommendation System — Lab 5</title>
+<style>
+  :root {
+    --bg: #0d0f1a;
+    --bg-deep: #070914;
+    --surface: #161929;
+    --surface2: #1e2235;
+    --accent: #6c63ff;
+    --accent2: #ff6584;
+    --accent3: #43e97b;
+    --text: #e8eaf6;
+    --text-muted: #8892b0;
+    --border: #2a2f4a;
+    --gold: #ffd700;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg-deep);
+    font-family: 'Segoe UI', system-ui, sans-serif; color: var(--text);
+  }
+
+  /* ── Slideshow ── */
+  #deck {
+    width: 100%; height: 100vh; position: relative;
+    background:
+      linear-gradient(135deg, rgba(108,99,255,.2) 0%, rgba(13,15,26,0) 34%),
+      linear-gradient(215deg, rgba(255,101,132,.16) 0%, rgba(13,15,26,0) 42%),
+      linear-gradient(315deg, rgba(67,233,123,.1) 0%, rgba(13,15,26,0) 38%),
+      linear-gradient(180deg, #111629 0%, #090b16 58%, #050711 100%);
+  }
+  #deck::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 72px 72px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,.55), rgba(0,0,0,.08));
+    pointer-events: none;
+    z-index: 0;
+  }
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    padding: 48px 64px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .4s ease, transform .4s ease;
+    transform: translateX(40px);
+    overflow: hidden;
+    z-index: 1;
+  }
+  .slide.active { opacity: 1; pointer-events: all; transform: translateX(0); }
+  .slide.exit { opacity: 0; transform: translateX(-40px); }
+
+  /* ── Nav ── */
+  #nav {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 16px; z-index: 100;
+    background: rgba(22,25,41,.85); border: 1px solid var(--border);
+    border-radius: 40px; padding: 10px 24px; backdrop-filter: blur(12px);
+  }
+  #nav button {
+    background: none; border: none; color: var(--text); cursor: pointer;
+    font-size: 20px; padding: 4px 8px; border-radius: 8px;
+    transition: background .2s, color .2s;
+  }
+  #nav button:hover { background: var(--accent); }
+  #counter { font-size: 13px; color: var(--text-muted); min-width: 56px; text-align: center; }
+  #progress-bar {
+    position: fixed; top: 0; left: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .4s ease; z-index: 200;
+  }
+
+  /* ── Typography ── */
+  .slide-title {
+    font-size: 2.2rem; font-weight: 800; text-align: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 8px; line-height: 1.2;
+  }
+  .slide-subtitle {
+    font-size: 1rem; color: var(--text-muted); text-align: center; margin-bottom: 32px;
+  }
+  h3 { font-size: 1.15rem; color: var(--accent); margin-bottom: 12px; font-weight: 700; }
+  p, li { font-size: .95rem; line-height: 1.65; color: var(--text-muted); }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 6px; }
+  strong { color: var(--text); }
+
+  /* ── Layout helpers ── */
+  .cols { display: flex; gap: 28px; width: 100%; align-items: flex-start; }
+  .cols > * { flex: 1; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px;
+  }
+  .card-sm { padding: 16px 20px; border-radius: 12px; }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block; padding: 3px 12px; border-radius: 20px;
+    font-size: .78rem; font-weight: 700; letter-spacing: .5px;
+  }
+  .badge-purple { background: rgba(108,99,255,.2); color: var(--accent); border: 1px solid var(--accent); }
+  .badge-pink   { background: rgba(255,101,132,.2); color: var(--accent2); border: 1px solid var(--accent2); }
+  .badge-green  { background: rgba(67,233,123,.2); color: var(--accent3); border: 1px solid var(--accent3); }
+  .badge-gold   { background: rgba(255,215,0,.15); color: var(--gold); border: 1px solid var(--gold); }
+
+  /* ── Metric cards ── */
+  .metric-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; width: 100%; }
+  .metric-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px 16px; text-align: center;
+  }
+  .metric-val { font-size: 2rem; font-weight: 800; color: var(--accent); }
+  .metric-val.pink { color: var(--accent2); }
+  .metric-val.green { color: var(--accent3); }
+  .metric-val.gold { color: var(--gold); }
+  .metric-label { font-size: .78rem; color: var(--text-muted); margin-top: 6px; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { background: var(--surface2); color: var(--accent); padding: 10px 14px; text-align: left; font-weight: 700; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text-muted); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(108,99,255,.05); }
+  .check { color: var(--accent3); font-weight: 700; }
+  .cross { color: var(--accent2); }
+  .warn  { color: var(--gold); }
+
+  /* ── Lifecycle diagram ── */
+  .lifecycle { display: flex; align-items: center; gap: 0; width: 100%; margin: 16px 0; }
+  .lc-step {
+    flex: 1; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 12px; text-align: center; position: relative;
+  }
+  .lc-arrow {
+    font-size: 1.4rem; color: var(--text-muted); padding: 0 8px; flex-shrink: 0;
+  }
+  .lc-step .lc-num { font-size: .7rem; color: var(--text-muted); margin-bottom: 4px; }
+  .lc-step .lc-title { font-size: .85rem; font-weight: 800; color: var(--text); margin-bottom: 6px; }
+  .lc-step .lc-ratings { font-size: .72rem; color: var(--accent); margin-bottom: 6px; }
+  .lc-step .lc-model { font-size: .78rem; color: var(--text-muted); }
+
+  /* ── Screenshot slides ── */
+  .screenshot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; }
+  .screenshot-grid.single { grid-template-columns: 1fr; }
+  .screenshot-grid.triple { grid-template-columns: 1fr 1fr 1fr; }
+  .ss-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+  }
+  .ss-card img { width: 100%; max-height: 500px; object-fit: contain; object-position: center; display: block; }
+  .ss-card.tall img { max-height: 500px; }
+  .ss-caption {
+    padding: 10px 14px; font-size: .8rem; color: var(--text-muted);
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── Architecture diagram ── */
+  .arch-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 18px; text-align: center;
+    font-size: .82rem; font-weight: 600;
+  }
+  .arch-arrow { color: var(--text-muted); font-size: 1.4rem; text-align: center; }
+
+  /* ── Title slide ── */
+  #slide-1 { background: radial-gradient(ellipse at 60% 40%, rgba(108,99,255,.18) 0%, transparent 65%),
+                           radial-gradient(ellipse at 20% 70%, rgba(255,101,132,.12) 0%, transparent 55%),
+                           var(--bg); }
+  .hero-title {
+    font-size: 3.2rem; font-weight: 900; text-align: center; line-height: 1.15;
+    background: linear-gradient(135deg, #fff 20%, var(--accent) 60%, var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 16px;
+  }
+  .hero-sub { font-size: 1.2rem; color: var(--text-muted); text-align: center; margin-bottom: 36px; }
+  .team-row { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-bottom: 36px; }
+  .team-chip {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 30px; padding: 8px 20px; font-size: .9rem; color: var(--text);
+  }
+  .tech-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .tech-chip {
+    background: rgba(108,99,255,.15); border: 1px solid rgba(108,99,255,.3);
+    border-radius: 8px; padding: 6px 16px; font-size: .82rem; color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── Code block ── */
+  .code-block {
+    background: #0a0c15; border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px; font-family: 'Courier New', monospace;
+    font-size: .82rem; color: #a8d8a8; line-height: 1.7; width: 100%;
+    overflow: auto; max-height: 180px;
+  }
+  .code-block .kw { color: #c792ea; }
+  .code-block .str { color: #c3e88d; }
+  .code-block .cmt { color: #546e7a; }
+  .code-block .num { color: #f78c6c; }
+
+  /* ── ROC chart placeholder ──   */
+  .roc-img { width: 100%; border-radius: 12px; border: 1px solid var(--border); object-fit: contain; max-height: 420px; }
+
+  /* ── Conclusion list ── */
+  .conclusion-item {
+    display: flex; align-items: flex-start; gap: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px; margin-bottom: 12px;
+  }
+  .conclusion-icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
+  .conclusion-text { font-size: .9rem; color: var(--text-muted); line-height: 1.55; }
+  .conclusion-text strong { color: var(--text); display: block; margin-bottom: 3px; }
+</style>
+</head>
+<body>
+
+<div id="progress-bar"></div>
+
+<div id="deck">
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 1 — TITLE -->
+  <div class="slide active" id="slide-1">
+    <div class="hero-title">🎬 Movie Recommendation System</div>
+    <div class="hero-sub">Работа в рамках курса 'Рекомендательные системы и коллаборативная фильтрация'</div>
+    <div class="team-row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:640px;margin:1.2rem auto 0;">
+  <div style="display:flex;align-items:flex-start;gap:10px;background:rgba(124,58,237,0.1);border:1px solid rgba(167,139,250,0.2);border-radius:14px;padding:12px 16px;text-align:left;">
+    <span style="font-size:1.2rem;margin-top:1px;">👤</span>
+    <div>
+      <div style="font-size:0.82rem;font-weight:700;color:#c4b5fd;">Анастасия Путинцева</div>
+      <div style="font-size:0.7rem;color:#7c6aad;margin-top:2px;">Предобработка данных · Реализация моделей рекомендательной системы</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:10px;background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.2);border-radius:14px;padding:12px 16px;text-align:left;">
+    <span style="font-size:1.2rem;margin-top:1px;">👤</span>
+    <div>
+      <div style="font-size:0.82rem;font-weight:700;color:#a5f3fc;">Кирилл Кононов</div>
+      <div style="font-size:0.7rem;color:#2e8a9e;margin-top:2px;">Разработка пользовательского интерфейса · Тестирование и обеспечение качества UI</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:10px;background:rgba(167,139,250,0.1);border:1px solid rgba(167,139,250,0.2);border-radius:14px;padding:12px 16px;text-align:left;">
+    <span style="font-size:1.2rem;margin-top:1px;">👤</span>
+    <div>
+      <div style="font-size:0.82rem;font-weight:700;color:#ddd6fe;">Денис Бельков</div>
+      <div style="font-size:0.7rem;color:#6d5fad;margin-top:2px;">Исследование и реализация алгоритмов рекомендательных систем · Тестирование и обеспечение качества</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:flex-start;gap:10px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:14px;padding:12px 16px;text-align:left;">
+    <span style="font-size:1.2rem;margin-top:1px;">👤</span>
+    <div>
+      <div style="font-size:0.82rem;font-weight:700;color:#86efac;">Денис Орловский</div>
+      <div style="font-size:0.7rem;color:#3a7a55;margin-top:2px;">Проектирование и администрирование базы данных PostgreSQL</div>
+    </div>
+  </div>
+</div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 2 — ЗАДАНИЕ -->
+  <div class="slide" id="slide-2">
+    <div class="slide-title">Задание проекта</div>
+    <div class="slide-subtitle">Что нужно было реализовать</div>
+    <div class="cols">
+      <div>
+        <div class="card">
+          <h3>🎯 Реализация</h3>
+          <ul>
+            <li><strong>Контентная фильтрация</strong> — на основе метаданных фильмов</li>
+            <li><strong>Коллаборативная</strong> — на основе взаимодействий пользователей</li>
+            <li><strong>Гибридная (LightFM)</strong> — комбинация подходов</li>
+            <li><strong>GNN-модель (LightGCN)</strong> — на графе пользователь–фильм</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>📊 Оценка качества</h3>
+          <ul>
+            <li>Precision@k, Recall@k, NDCG@k</li>
+            <li>ROC AUC (LightFM)</li>
+            <li>RMSE при наличии явных рейтингов</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h3>🏭 Продакшен-анализ</h3>
+          <ul>
+            <li>Качество рекомендаций</li>
+            <li>Скорость обучения и инференса</li>
+            <li>Масштабируемость</li>
+            <li>Работа в реальном времени</li>
+            <li>Сложность обновления модели</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>🖥️ UI</h3>
+          <ul>
+            <li>Выбор лучшей модели для продакшена</li>
+            <li>Реализация пользовательского интерфейса</li>
+            <li>Демонстрация всех типов рекомендаций</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 3 — ДАТАСЕТ -->
+  <div class="slide" id="slide-3">
+    <div class="slide-title">Датасет и подготовка данных</div>
+    <div class="slide-subtitle">MovieLens + The Movies Dataset (TMDB)</div>
+    <div class="metric-grid" style="margin-bottom:24px">
+      <div class="metric-card">
+        <div class="metric-val">45K+</div>
+        <div class="metric-label">фильмов</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val pink">270K+</div>
+        <div class="metric-label">рейтингов</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val green">671</div>
+        <div class="metric-label">пользователей (ML)</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val gold">20+</div>
+        <div class="metric-label">признаков на фильм</div>
+      </div>
+    </div>
+    <div class="cols">
+      <div class="card">
+        <h3>📁 Основные файлы</h3>
+        <ul>
+          <li><strong>movies.csv</strong> — TMDB id, название, жанры, год</li>
+          <li><strong>ratings.csv</strong> — user_id, movie_id, rating, timestamp</li>
+          <li><strong>keywords_clean.csv</strong> — ключевые слова фильмов</li>
+          <li><strong>cast_clean.csv / crew_clean.csv</strong> — актёры, режиссёры</li>
+          <li><strong>links_clean.csv</strong> — маппинг TMDB ↔ MovieLens</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>🔧 ETL-пайплайн</h3>
+        <ul>
+          <li>Очистка и нормализация данных</li>
+          <li>Унификация ключей: <code>movie_id = TMDB id</code></li>
+          <li>Маппинг movielens_id → TMDB id</li>
+          <li>Хранение в PostgreSQL + SQLite-снимок</li>
+          <li>Проверка ссылочной целостности</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>🗄️ База данных</h3>
+        <ul>
+          <li>Таблицы: users, movies, ratings, favorites</li>
+          <li>Индексы по user_id для быстрого подсчёта стадии</li>
+          <li>ER-диаграмма в <code>database/</code></li>
+          <li>Партиционирование ratings по user_id</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 4 — АРХИТЕКТУРА -->
+  <div class="slide" id="slide-4">
+    <div class="slide-title">Архитектура системы</div>
+    <div class="slide-subtitle">Unified Recommendation Router с прогрессивной стратегией</div>
+    <div class="cols" style="align-items:stretch">
+      <div style="flex:1.2">
+        <div class="card" style="height:100%">
+          <h3>🔀 Unified Router</h3>
+          <p style="margin-bottom:14px">Единая точка входа — маршрутизирует запрос к нужной модели на основе стадии пользователя:</p>
+          <div class="code-block">
+<span class="kw">from</span> recommendation_router <span class="kw">import</span> UnifiedRecommendationRouter
+
+router = UnifiedRecommendationRouter(movies, ratings)
+
+<span class="cmt"># Автоматически выбирает стратегию</span>
+result = router.get_recommendations(
+    user_id=<span class="num">42</span>,
+    n_recommendations=<span class="num">10</span>
+)
+<span class="cmt"># result.strategy → "content" / "hybrid" / "collaborative"</span>
+<span class="cmt"># result.user_stage → "cold_start" / "warm" / "mature"</span>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1">
+        <div class="card" style="margin-bottom:16px">
+          <h3>🧩 Компоненты</h3>
+          <ul>
+            <li><strong>content_lightFM.py</strong> — контентная модель</li>
+            <li><strong>lightfm_model.py</strong> — коллаборативная</li>
+            <li><strong>hybrid.py</strong> — SVD + FAISS гибрид</li>
+            <li><strong>lightgcn_model.py</strong> — GNN модель</li>
+            <li><strong>cold_start_questionnaire.py</strong> — анкета</li>
+            <li><strong>recommendation_router.py</strong> — роутер</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>🖥️ UI + Backend</h3>
+          <ul>
+            <li>Авторизация / регистрация</li>
+            <li>Личный кабинет с историей</li>
+            <li>Все 3 типа рекомендаций</li>
+            <li>Поиск с ползунком количества</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 5 — LIFECYCLE -->
+  <div class="slide" id="slide-5">
+    <div class="slide-title">Жизненный цикл пользователя</div>
+    <div class="slide-subtitle">Cold Start Strategy — прогрессивная смена модели по мере накопления оценок</div>
+
+    <div class="lifecycle">
+      <div class="lc-step" style="border-color: var(--accent2)">
+        <div class="lc-num">СТАДИЯ 1</div>
+        <div class="lc-title" style="color:var(--accent2)">Новый пользователь</div>
+        <div class="lc-ratings">0 оценок</div>
+        <div class="badge badge-pink">Анкета</div>
+        <div class="lc-model" style="margin-top:8px">Жанры + любимые фильмы + год выпуска</div>
+      </div>
+      <div class="lc-arrow">→</div>
+      <div class="lc-step" style="border-color: var(--gold)">
+        <div class="lc-num">СТАДИЯ 2</div>
+        <div class="lc-title" style="color:var(--gold)">Cold Start</div>
+        <div class="lc-ratings">1–5 оценок</div>
+        <div class="badge badge-gold">Content-Based</div>
+        <div class="lc-model" style="margin-top:8px">Схожесть метаданных, нет истории для коллаб.</div>
+      </div>
+      <div class="lc-arrow">→</div>
+      <div class="lc-step" style="border-color: var(--accent)">
+        <div class="lc-num">СТАДИЯ 3</div>
+        <div class="lc-title" style="color:var(--accent)">Warm Start</div>
+        <div class="lc-ratings">5–15 оценок</div>
+        <div class="badge badge-purple">Hybrid</div>
+        <div class="lc-model" style="margin-top:8px">Content + Collaborative (SVD+FAISS), балансировка</div>
+      </div>
+      <div class="lc-arrow">→</div>
+      <div class="lc-step" style="border-color: var(--accent3)">
+        <div class="lc-num">СТАДИЯ 4</div>
+        <div class="lc-title" style="color:var(--accent3)">Зрелый</div>
+        <div class="lc-ratings">15+ оценок</div>
+        <div class="badge badge-green">Collaborative</div>
+        <div class="lc-model" style="margin-top:8px">LightFM — полный коллаборативный фильтр</div>
+      </div>
+    </div>
+
+    <div class="cols" style="margin-top:8px">
+      <div class="card card-sm">
+        <h3>Анкета (Cold Start)</h3>
+        <ul>
+          <li>Выбор любимых жанров</li>
+          <li>Ввод 2–5 любимых фильмов</li>
+          <li>Предпочтение по году: <em>классика / новое / любое</em></li>
+          <li>Рекомендации через <code>cold_start_score</code></li>
+        </ul>
+      </div>
+      <div class="card card-sm">
+        <h3>Hybrid Score</h3>
+        <p style="font-family:monospace; font-size:.9rem; color:var(--text); margin-top:8px; line-height:2">
+          hybrid_score =<br>
+          &nbsp;&nbsp;<span style="color:var(--accent)">α</span> × svd_score_norm<br>
+          &nbsp;+ <span style="color:var(--accent2)">(1−α)</span> × content_score_norm
+        </p>
+        <p style="margin-top:8px">α управляет балансом между collaborative и content</p>
+      </div>
+      <div class="card card-sm">
+        <h3>Переход на коллаб.</h3>
+        <ul>
+          <li>Коллаборативный фильтр становится доступен после <strong>15 оценок</strong></li>
+          <li>Рекомендации обновляются автоматически после каждого сохранения</li>
+          <li>Стратегия переключается без участия пользователя</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 6 — CONTENT -->
+  <div class="slide" id="slide-6">
+    <div class="slide-title">Контентная фильтрация</div>
+    <div class="slide-subtitle">Рекомендации на основе метаданных фильмов</div>
+    <div class="cols">
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>⚙️ Как работает</h3>
+          <ul>
+            <li>Текстовые эмбеддинги через <strong>SentenceTransformer</strong> (названия + жанры)</li>
+            <li>Нормализованный год выпуска как числовой признак</li>
+            <li>Интеграция признаков через <strong>LightFM</strong> (content mode)</li>
+            <li>Implicit feedback: наличие/отсутствие взаимодействия</li>
+            <li>Поиск ближайших соседей через <strong>FAISS</strong> индекс</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>✅ Когда использовать</h3>
+          <ul>
+            <li>Новые пользователи (нет истории)</li>
+            <li>Новые фильмы с малым числом рейтингов</li>
+            <li>Когда нужно объяснить рекомендацию</li>
+          </ul>
+          <h3 style="margin-top:14px">❌ Ограничения</h3>
+          <ul>
+            <li>Не учитывает поведение других пользователей</li>
+            <li>Ниже точность при богатой истории</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>🔢 Признаки фильма</h3>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">
+            <span class="badge badge-purple">Название</span>
+            <span class="badge badge-purple">Жанры</span>
+            <span class="badge badge-purple">Год выпуска</span>
+            <span class="badge badge-pink">Ключевые слова</span>
+            <span class="badge badge-pink">Актёры</span>
+            <span class="badge badge-pink">Режиссёр</span>
+            <span class="badge badge-green">Описание</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>📄 Модуль: content_lightFM.py</h3>
+          <div class="code-block" style="max-height:160px">
+<span class="cmt"># SentenceTransformer для текстовых эмбеддингов</span>
+model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+embeddings = model.encode(titles_and_genres)
+
+<span class="cmt"># Нормализация года</span>
+year_feature = (year - min_year) / (max_year - min_year)
+
+<span class="cmt"># LightFM с item features</span>
+lfm = LightFM(loss=<span class="str">'warp'</span>)
+lfm.fit(interactions, item_features=features)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 7 — COLLABORATIVE -->
+  <div class="slide" id="slide-7">
+    <div class="slide-title">Коллаборативная фильтрация</div>
+    <div class="slide-subtitle">LightFM — Factorization Machines на взаимодействиях</div>
+    <div class="cols">
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>⚙️ Принцип работы</h3>
+          <ul>
+            <li>Строит <strong>latent embeddings</strong> пользователей и фильмов</li>
+            <li>Обучение через <strong>WARP loss</strong> (Weighted Approximate Rank Pairwise)</li>
+            <li>Explicit ratings → implicit positive/negative feedback</li>
+            <li>Матрица взаимодействий: user × item</li>
+            <li>BPR Loss для ранжирования (положительные выше отрицательных)</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>📊 Результаты</h3>
+          <div class="metric-grid" style="grid-template-columns:1fr 1fr; margin-top:8px">
+            <div class="metric-card">
+              <div class="metric-val">0.7277</div>
+              <div class="metric-label">ROC AUC<br>(500 users sample)</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-val green">~1 сек</div>
+              <div class="metric-label">время инференса<br>на CPU</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>✅ Преимущества LightFM</h3>
+          <ul>
+            <li>Быстрое обучение и инференс</li>
+            <li>Минимум памяти</li>
+            <li>Поддержка side features (метаданные)</li>
+            <li>Простая настройка гиперпараметров</li>
+            <li>Хорошо масштабируется</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>📄 Модуль: lightfm_model.py</h3>
+          <div class="code-block" style="max-height:130px">
+<span class="kw">from</span> lightfm <span class="kw">import</span> LightFM
+<span class="kw">from</span> lightfm.evaluation <span class="kw">import</span> auc_score
+
+model = LightFM(
+    no_components=<span class="num">64</span>,
+    loss=<span class="str">'warp'</span>,
+    learning_rate=<span class="num">0.05</span>
+)
+model.fit(train, epochs=<span class="num">30</span>, num_threads=<span class="num">4</span>)
+auc = auc_score(model, test).mean()  <span class="cmt"># → 0.7277</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 8 — HYBRID -->
+  <div class="slide" id="slide-8">
+    <div class="slide-title">Гибридная система</div>
+    <div class="slide-subtitle">SVD + FAISS + взвешенное ранжирование</div>
+    <div class="cols">
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>⚙️ Алгоритм</h3>
+          <ol style="padding-left:20px">
+            <li style="margin-bottom:8px">Берём фильмы с оценкой пользователя <strong>≥ 4.0</strong></li>
+            <li style="margin-bottom:8px">Строим content-based профиль через <strong>FAISS</strong> → пул кандидатов</li>
+            <li style="margin-bottom:8px">Для кандидатов вычисляем <strong>SVD-прогнозы</strong></li>
+            <li style="margin-bottom:8px">Итоговый скор = Weighted Hybrid Reranking</li>
+          </ol>
+          <div style="background:var(--surface2); border-radius:10px; padding:14px; margin-top:12px; font-family:monospace; font-size:.88rem; line-height:1.9; color:var(--text)">
+            hybrid_score =<br>
+            &nbsp;&nbsp;<span style="color:var(--accent)">α</span> × svd_score_norm<br>
+            &nbsp;+ <span style="color:var(--accent2)">(1 − α)</span> × content_score_norm
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>🎛️ Параметры эксперта</h3>
+          <div class="code-block" style="max-height:130px">
+get_hybrid_recommendations(
+    user_id=<span class="num">1</span>,
+    liked_movies=[<span class="str">"The Matrix"</span>],
+    alpha=<span class="num">0.6</span>,   <span class="cmt"># баланс SVD/content</span>
+    top_n=<span class="num">10</span>,
+    content_top_k=<span class="num">5000</span>  <span class="cmt"># FAISS пул</span>
+)
+          </div>
+        </div>
+        <div class="card">
+          <h3>📊 Поля результата</h3>
+          <ul>
+            <li><code>svd_score</code> — оценка SVD</li>
+            <li><code>content_score</code> — оценка FAISS</li>
+            <li><code>svd_score_norm</code> — нормализованная</li>
+            <li><code>content_score_norm</code> — нормализованная</li>
+            <li><code>hybrid_score</code> — итоговая</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 9 — GNN -->
+  <div class="slide" id="slide-9">
+    <div class="slide-title">GNN — LightGCN</div>
+    <div class="slide-subtitle">Graph Convolutional Network на графе пользователь–фильм</div>
+    <div class="cols">
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>🕸️ Принцип работы</h3>
+          <ul>
+            <li>Строит <strong>двудольный граф</strong> user–item из ratings.csv</li>
+            <li>Инициализирует эмбеддинги случайно, улучшает через <strong>K слоёв GCN</strong></li>
+            <li>Пропагирует информацию между соседями (user ↔ item)</li>
+            <li>Обучение через <strong>BPR Loss</strong> с negative sampling</li>
+            <li>Не использует контентные признаки — только граф связей</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>⚙️ Параметры</h3>
+          <div class="code-block" style="max-height:110px">
+emb_dim    = <span class="num">64</span>    <span class="cmt"># размер эмбеддинга</span>
+n_layers   = <span class="num">3</span>     <span class="cmt"># слоёв GCN</span>
+lr         = <span class="num">0.001</span>  <span class="cmt"># learning rate</span>
+epochs     = <span class="num">20</span>
+batch_size = <span class="num">1024</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h3>⚡ Требования</h3>
+          <ul>
+            <li>PyTorch ≥ 2.0, torch-geometric ≥ 2.3</li>
+            <li>GPU рекомендуется для продакшена</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 10 — METRICS -->
+  <div class="slide" id="slide-10">
+    <div class="slide-title">Метрики качества</div>
+    <div class="slide-subtitle">Оценка всех моделей по стандартным IR-метрикам</div>
+    <div class="cols" style="align-items:flex-start">
+      <div style="flex:1.1">
+        <img src="models/lightfm_roc_curve.png" class="roc-img" alt="ROC AUC LightFM" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"/>
+        <div style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:12px; height:260px; align-items:center; justify-content:center; color:var(--text-muted); font-size:.9rem;">
+          📈 ROC Curve — LightFM<br><span style="font-size:1.8rem; color:var(--accent); font-weight:800; display:block; margin-top:12px">AUC = 0.7277</span>
+        </div>
+        <p style="text-align:center; color:var(--text-muted); font-size:.8rem; margin-top:8px">ROC-кривая LightFM (выборка 500 пользователей)</p>
+      </div>
+      <div style="flex:1.4">
+        <div class="card card-sm" style="margin-bottom:12px">
+          <h3>LightFM — Коллаборативная</h3>
+          <div class="metric-grid" style="grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px">
+            <div class="metric-card"><div class="metric-val" style="font-size:1.6rem">0.73</div><div class="metric-label">ROC AUC</div></div>
+            <div class="metric-card"><div class="metric-val green" style="font-size:1.6rem">~1s</div><div class="metric-label">Инференс</div></div>
+            <div class="metric-card"><div class="metric-val pink" style="font-size:1.6rem">~30s</div><div class="metric-label">Обучение</div></div>
+          </div>
+        </div>
+        <div class="card card-sm">
+          <h3>LightFM</h3>
+          <table style="margin-top:8px">
+            <tr><th>Метрика</th><th>@K=10</th><th>@K=20</th></tr>
+            <tr><td>Precision@K</td><td class="check">0.0324</td><td>0.0198</td></tr>
+            <tr><td>Recall@K</td><td class="check">0.0652</td><td class="check">0.0823</td></tr>
+            <tr><td>NDCG@K</td><td class="check">0.0421</td><td class="check">0.0527</td></tr>
+          </table>
+          <p style="margin-top:10px; font-size:.8rem">610 пользователей · CPU · 20 эпох</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 11 — COMPARISON -->
+  <div class="slide" id="slide-11">
+    <div class="slide-title">Сравнение моделей</div>
+    <div class="slide-subtitle">По критериям пригодности для продакшена</div>
+    <div class="card" style="width:100%; padding:0; overflow:hidden">
+      <table>
+        <thead>
+          <tr>
+            <th>Критерий</th>
+            <th>Content-Based</th>
+            <th>LightFM (Collab)</th>
+            <th>Hybrid</th>
+            <th>LightGCN (GNN)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Качество (зрелый user)</strong></td>
+            <td class="warn">Среднее</td>
+            <td class="check">Высокое</td>
+            <td class="check">Высокое</td>
+            <td class="check">Высокое</td>
+          </tr>
+          <tr>
+            <td><strong>Cold Start</strong></td>
+            <td class="check">Отлично</td>
+            <td class="cross">Не работает</td>
+            <td class="warn">Частично</td>
+            <td class="cross">Не работает</td>
+          </tr>
+          <tr>
+            <td><strong>Скорость обучения</strong></td>
+            <td class="check">Секунды</td>
+            <td class="check">~30 сек</td>
+            <td class="warn">Минуты</td>
+            <td class="cross">1–3 мин (CPU)</td>
+          </tr>
+          <tr>
+            <td><strong>Скорость инференса</strong></td>
+            <td class="check">&lt;0.1 сек</td>
+            <td class="check">~1 сек</td>
+            <td class="warn">~0.5 сек</td>
+            <td class="warn">1–3 сек</td>
+          </tr>
+          <tr>
+            <td><strong>Масштабируемость</strong></td>
+            <td class="check">FAISS</td>
+            <td class="check">Хорошая</td>
+            <td class="warn">Средняя</td>
+            <td class="cross">Требует GPU</td>
+          </tr>
+          <tr>
+            <td><strong>Real-time обновление</strong></td>
+            <td class="check">Да</td>
+            <td class="warn">Переобучение</td>
+            <td class="warn">Частично</td>
+            <td class="cross">Переобучение</td>
+          </tr>
+          <tr>
+            <td><strong>Объяснимость</strong></td>
+            <td class="check">Высокая</td>
+            <td class="warn">Средняя</td>
+            <td class="warn">Средняя</td>
+            <td class="cross">Низкая</td>
+          </tr>
+          <tr style="background:rgba(108,99,255,.07)">
+            <td><strong>Выбор для продакшена</strong></td>
+            <td>Cold Start</td>
+            <td class="check" style="font-weight:700">✓ Основная</td>
+            <td class="check" style="font-weight:700">✓ Warm Start</td>
+            <td>Эксперимент</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 12 — PROD -->
+  <div class="slide" id="slide-12">
+    <div class="slide-title">Обоснование выбора для продакшена</div>
+    <div class="slide-subtitle">Unified Router: LightFM (Hybrid) как основная модель</div>
+    <div class="cols">
+      <div>
+        <div class="card" style="margin-bottom:16px; border-color:var(--accent3)">
+          <h3 style="color:var(--accent3)">✅ Почему LightFM + Hybrid</h3>
+          <ul>
+            <li>ROC AUC <strong>0.7277</strong> — хорошее качество ранжирования</li>
+            <li>Быстрый инференс (~1 сек на CPU)</li>
+            <li>Поддержка cold start через side features</li>
+            <li>Простое переобучение при новых данных</li>
+            <li>Масштабируется без GPU</li>
+          </ul>
+        </div>
+        <div class="card" style="border-color:var(--accent2)">
+          <h3 style="color:var(--accent2)">❌ Почему не LightGCN</h3>
+          <ul>
+            <li>Требует GPU для продакшена</li>
+            <li>Долгое переобучение (1–3 мин CPU)</li>
+            <li>Сложная инфраструктура (PyG)</li>
+            <li>Ниже объяснимость рекомендаций</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3>🏭 Продакшен-архитектура</h3>
+          <ul>
+            <li><strong>FastAPI + Gunicorn</strong> — serving рекомендаций</li>
+            <li><strong>Redis</strong> — кэширование user embeddings</li>
+            <li><strong>FAISS</strong> — быстрый поиск похожих фильмов</li>
+            <li><strong>Фоновый переобучение</strong> — batch processing</li>
+            <li><strong>Партиционирование</strong> ratings по user_id</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>⏱️ Производительность</h3>
+          <table>
+            <tr><th>Этап</th><th>Время</th></tr>
+            <tr><td>Анкета (cold start)</td><td class="warn">2–5 мин (интерактив)</td></tr>
+            <tr><td>Content-Based</td><td class="check">&lt;0.1 сек (FAISS)</td></tr>
+            <tr><td>Hybrid</td><td class="check">~0.5 сек</td></tr>
+            <tr><td>Collaborative</td><td class="check">~1 сек</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 13 — UI AUTH -->
+  <div class="slide" id="slide-13">
+    <div class="slide-title">UI — Авторизация и регистрация</div>
+    <div class="slide-subtitle">Вход по email и пароль · Создание нового профиля</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/auth_page.png" alt="Страница авторизации" />
+        <div class="ss-caption"><strong>Страница авторизации</strong> — вход по email (логин) и паролю</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/login.png" alt="Форма входа" />
+        <div class="ss-caption"><strong>Форма входа</strong> — В качестве логина выступает почта пользователя</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 14 — UI PERSONAL -->
+  <div class="slide" id="slide-14">
+    <div class="slide-title">UI — Личный кабинет</div>
+    <div class="slide-subtitle">История оценок · Избранные фильмы · Сортировка</div>
+    <div class="screenshot-grid triple">
+      <div class="ss-card">
+        <img src="UI_screens/personal_acc.png" alt="Личный кабинет" />
+        <div class="ss-caption"><strong>Личный кабинет</strong> — сохранённые оценки, обложки избранного</div>
+      </div>
+      <div class="ss-card">
+        <img src="UI_screens/pc_history.png" alt="История оценок" />
+        <div class="ss-caption"><strong>Сортировка</strong>— по жанру, оценке, году и другим атрибутам</div>
+      </div>
+      <div class="ss-card">
+        <img src="UI_screens/pc_history2.png" alt="Сортировка" />
+        <div class="ss-caption"><strong>История оценок</strong>  — фильмы, которые пользователь уже оценил</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 15 — UI COLD START -->
+  <div class="slide" id="slide-15">
+    <div class="slide-title">UI — Анкета (Cold Start)</div>
+    <div class="slide-subtitle">Регистрация нового пользователя · Заполнение предпочтений</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/coldStart.png" alt="Анкета 1" />
+        <div class="ss-caption"><strong>Регистрация и пустой профиль</strong> — новый пользователь без оценок</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/coldStart2.png" alt="Анкета 2" />
+        <div class="ss-caption"><strong>Заполнение анкеты</strong> — жанры, любимые фильмы, год выпуска</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 16 — UI COLD START 2 -->
+  <div class="slide" id="slide-16">
+    <div class="slide-title">UI — Анкета: жанровые предпочтения</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/coldStart3.png" alt="Анкета 3" />
+        <div class="ss-caption"><strong>Выбор фильмов</strong></div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/coldStart4.png" alt="Анкета 4" />
+        <div class="ss-caption"><strong>Сохранение анкеты</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 17 — UI COLLAB -->
+  <div class="slide" id="slide-17">
+    <div class="slide-title">UI — Коллаборативная система</div>
+    <div class="slide-subtitle">Персонализированные рекомендации · Оценка прямо в списке · Обновление после сохранения</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/collab_sys.png" alt="Коллаб система" />
+        <div class="ss-caption"><strong>Коллаборативные рекомендации</strong> — выбранное число фильмов, оценка и добавление в избранное прямо здесь</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/collab_sys2.png" alt="Коллаб обновление" />
+        <div class="ss-caption"><strong>Обновление после сохранения</strong> — рекомендации корректируются, некоторые фильмы меняются</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 18 — UI BEFORE/AFTER -->
+  <div class="slide" id="slide-18">
+    <div class="slide-title">UI — До и после коллаборативной системы</div>
+    <div class="slide-subtitle">Коллаборативный фильтр активируется после 15 оценок</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/sysBeforeCollab.png" alt="До коллаб" />
+        <div class="ss-caption"><strong>До 15 оценок</strong> — в рекомендательных системах нет коллаборативного способа</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/sysAfterCollab.png" alt="После коллаб" />
+        <div class="ss-caption"><strong>После 15 оценок</strong> — коллаборативная система заработала, появился новый блок</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 19 — UI CONTENT -->
+  <div class="slide" id="slide-19">
+    <div class="slide-title">UI — Контентная система</div>
+    <div class="slide-subtitle">Рекомендации меняются в зависимости от выбранного фильма</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/contentSystem1.png" alt="Контент 1" />
+        <div class="ss-caption"><strong>Поиск опорного фильма</strong> — фильм легко найти через строку поиска</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/contentSystem2.png" alt="Контент 2" />
+        <div class="ss-caption"><strong>Рекомендации по фильму</strong> — список меняется при выборе другого опорного фильма</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 20 — UI HYBRID -->
+  <div class="slide" id="slide-20">
+    <div class="slide-title">UI — Гибридная система</div>
+    <div class="slide-subtitle">Учитываются предпочтения пользователя + схожесть с указанным фильмом</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/hybridSys1.png" alt="Гибрид 1" />
+        <div class="ss-caption"><strong>Гибридные рекомендации</strong> - учитываются предпочтения пользователя и схожесть с указанным фильмом</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/hybridSys2.png" alt="Гибрид 2" />
+        <div class="ss-caption"><strong>Табличный вид</strong> — возможность вывести рекомендованные фильмы в таблице</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 21 — UI SEARCH -->
+  <div class="slide" id="slide-21">
+    <div class="slide-title">UI — Поиск и оценка фильмов</div>
+    <div class="slide-subtitle">Ползунок числа результатов · Оценка новых фильмов из поиска</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/search.png" alt="Поиск 1" />
+        <div class="ss-caption"><strong>Поиск фильмов</strong> — количество результатов регулируется ползунком</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/search2.png" alt="Поиск 2" />
+        <div class="ss-caption"><strong>Оценка новых фильмов</strong> — разное число фильмов при разном положении ползунка</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 22 — DEMO COMPARISON -->
+  <div class="slide" id="slide-22">
+    <div class="slide-title">Демонстрация: сравнение пользователей</div>
+    <div class="slide-subtitle">Как жанровые предпочтения влияют на рекомендации</div>
+    <div class="screenshot-grid">
+      <div class="ss-card tall">
+        <img src="UI_screens/comparisonBeforeColab.png" alt="Сравнение до" />
+        <div class="ss-caption"><strong>коллаборативная система ДО</strong> — оценки поставлены, рекомендации персонализированы под её предпочтения</div>
+      </div>
+      <div class="ss-card tall">
+        <img src="UI_screens/comparisonAfterCollab.png" alt="Сравнение после" />
+        <div class="ss-caption"><strong>коллаборативная система ПОСЛЕ</strong> — высокие оценки комедиям → коллаборативный фильтр рекомендует другие жанры</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ SLIDE 23 — CONCLUSIONS -->
+  <div class="slide" id="slide-23">
+    <div class="slide-title">Выводы</div>
+    <div class="slide-subtitle">Итоги проекта · Что реализовано · Что выбрано для продакшена</div>
+    <div style="width:100%">
+      <div class="conclusion-item">
+        <div class="conclusion-icon">📦</div>
+        <div class="conclusion-text">
+          <strong>4 модели реализованы и протестированы</strong>
+          Контентная (SentenceTransformer+LightFM+FAISS), Коллаборативная (LightFM WARP), Гибридная (SVD+FAISS+LightFM)
+        </div>
+      </div>
+      <div class="conclusion-item">
+        <div class="conclusion-icon">📊</div>
+        <div class="conclusion-text">
+          <strong>Метрики собраны по всем моделям</strong>
+          LightFM ROC AUC = 0.7277
+        </div>
+      </div>
+      <div class="conclusion-item">
+        <div class="conclusion-icon">🔀</div>
+        <div class="conclusion-text">
+          <strong>Реализована прогрессивная cold start стратегия</strong>
+          Unified Router автоматически переключает модель: анкета → content → hybrid → collaborative (после 15 оценок)
+        </div>
+      </div>
+      <div class="conclusion-item">
+        <div class="conclusion-icon">🏆</div>
+        <div class="conclusion-text">
+          <strong>Выбор для продакшена: LightFM (Hybrid)</strong>
+          Лучший баланс качества, скорости и масштабируемости. Работает на CPU, поддерживает cold start, быстрый инференс ~1 сек
+        </div>
+      </div>
+      <div class="conclusion-item">
+        <div class="conclusion-icon">🖥️</div>
+        <div class="conclusion-text">
+          <strong>UI реализован с поддержкой всех 3 типов рекомендаций</strong>
+          Авторизация, личный кабинет, анкета, контентный / коллаборативный / гибридный блоки, поиск с ползунком
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /#deck -->
+
+<!-- ── Navigation ── -->
+<div id="nav">
+  <button onclick="go(-1)" title="Назад">◀</button>
+  <span id="counter">1 / 23</span>
+  <button onclick="go(1)" title="Вперёд">▶</button>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let cur = 0;
+
+  function go(dir) {
+    const next = cur + dir;
+    if (next < 0 || next >= total) return;
+    slides[cur].classList.remove('active');
+    slides[cur].classList.add('exit');
+    setTimeout(() => slides[cur - dir + (dir > 0 ? 0 : 0)].classList.remove('exit'), 400);
+    cur = next;
+    // clear exit after transition
+    slides.forEach((s, i) => { if (i !== cur) { setTimeout(()=>{ s.classList.remove('exit'); }, 420); } });
+    slides[cur].classList.add('active');
+    document.getElementById('counter').textContent = (cur + 1) + ' / ' + total;
+    document.getElementById('progress-bar').style.width = ((cur + 1) / total * 100) + '%';
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') go(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp') go(-1);
+  });
+
+  // touch
+  let tx = 0;
+  document.addEventListener('touchstart', e => tx = e.touches[0].clientX);
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+  });
+
+  // init
+  document.getElementById('progress-bar').style.width = (1 / total * 100) + '%';
+</script>
+</body>
+</html>
