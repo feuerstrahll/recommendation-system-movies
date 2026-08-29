@@ -203,13 +203,6 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
     losses_history = []
 
     for epoch in range(epochs):
-        optimizer.zero_grad()
-
-        # Один forward графа на эпоху: граф-свёртка — самая дорогая операция
-        # (torch.sparse.mm по всему графу), и параметры не меняются внутри эпохи,
-        # поэтому пересчитывать её на каждый mini-batch бессмысленно.
-        user_embs, item_embs = model(edge_index)
-
         # Сэмплируем по одной (user, pos, neg) тройке на каждого пользователя за эпоху
         u_idx_list = [user_map[u] for u in all_users_mapped]
         pos_items = [rng.choice(all_pos[i]) for i in range(len(all_users_mapped))]
@@ -228,39 +221,42 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
         pos_idx = torch.tensor(pos_idx_list, device=device)
         neg_idx = torch.tensor(neg_idx_list, device=device)
 
-        # BPR loss считается батчами ТОЛЬКО по уже посчитанным эмбеддингам —
-        # без повторного forward графа, батчинг здесь только ради экономии памяти
+        # optimizer.step() PER BATCH, not per epoch: with one sample per user
+        # per epoch, a single step/epoch means epochs=10 gives only 10 real
+        # gradient updates total — nowhere near enough to move the BPR loss
+        # off its random-init value of ln(2) ~= 0.693. Each batch recomputes
+        # the graph forward pass since parameters (and therefore user_embs/
+        # item_embs) change after every optimizer.step().
         total_loss = 0.0
         n_batches = 0
+        perm = torch.randperm(len(u_idx), device=device)
         pbar = tqdm(
             range(0, len(u_idx), batch_size),
             desc=f"Epoch {epoch+1}/{epochs}",
             leave=False
         )
-        losses = []
         for start in pbar:
             end = min(start + batch_size, len(u_idx))
+            idx = perm[start:end]
 
-            u_emb = user_embs[u_idx[start:end]]
-            pos_emb = item_embs[pos_idx[start:end]]
-            neg_emb = item_embs[neg_idx[start:end]]
+            user_embs, item_embs = model(edge_index)
+
+            u_emb = user_embs[u_idx[idx]]
+            pos_emb = item_embs[pos_idx[idx]]
+            neg_emb = item_embs[neg_idx[idx]]
 
             pos_scores = (u_emb * pos_emb).sum(dim=1)
             neg_scores = (u_emb * neg_emb).sum(dim=1)
 
             batch_loss = -F.logsigmoid(pos_scores - neg_scores).mean()
-            losses.append(batch_loss)
+
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
 
             total_loss += batch_loss.item()
             n_batches += 1
             pbar.set_postfix({'loss': f'{batch_loss.item():.4f}'})
-
-        # Один backward/optimizer.step() на эпоху — суммируем batch-loss'ы
-        # в единый граф вычислений, чтобы градиенты корректно накапливались
-        # по всем сэмплам эпохи от общего forward-прохода.
-        epoch_loss = torch.stack(losses).mean()
-        epoch_loss.backward()
-        optimizer.step()
 
         avg_loss = total_loss / n_batches if n_batches > 0 else 0
         losses_history.append(avg_loss)
