@@ -245,33 +245,13 @@ def evaluate_content_based(train_df, test_df, eval_users):
 
 def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50):
     print("\n[2/5] SVD (matrix factorization baseline)...")
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.linalg import svds
-
-    all_users = train_df["user_id"].unique()
-    all_items = train_df["movie_id"].unique()
-    n_users = len(all_users)
-    n_items = len(all_items)
-
-    user_map = {u: i for i, u in enumerate(all_users)}
-    item_map = {m: i for i, m in enumerate(all_items)}
-    item_inv = {i: m for m, i in item_map.items()}
-
-    u_idx = train_df["user_id"].map(user_map).values.astype(np.int32)
-    i_idx = train_df["movie_id"].map(item_map).values.astype(np.int32)
-    # Same binarized 0/1 interactions as every other collaborative model —
-    # train_df has no rating column left after load_and_split's binarization.
-    vals = np.ones(len(train_df), dtype=np.float32)
-    matrix = csr_matrix((vals, (u_idx, i_idx)), shape=(n_users, n_items))
-
-    k = min(n_factors, min(matrix.shape) - 1)
+    from models.svd_model import train_svd
 
     t0 = time.perf_counter()
-    u, s, vt = svds(matrix, k=k)
-    user_factors = u * s
-    item_factors = vt.T
+    user_factors, item_factors, user_map, item_map, item_inv = train_svd(train_df, n_factors)
     train_time = time.perf_counter() - t0
-    print(f"  Train time: {train_time:.1f}s (k={k} latent factors)")
+    print(f"  Train time: {train_time:.1f}s "
+          f"(k={min(n_factors, min(len(user_map), len(item_map)) - 1)} latent factors)")
 
     test_df_known = drop_unseen_test_items(train_df, test_df, set(item_map.keys()))
     test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()

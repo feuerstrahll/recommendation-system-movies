@@ -58,9 +58,9 @@ as a single "winner":
 
 | Model | File | Approach |
 |---|---|---|
-| Content-Based | `models/content_lightFM.py` | TF-IDF / SentenceTransformer embeddings over title + genres |
-| LightFM (collaborative) | `models/lightfm_model.py` | Factorization machines, interaction data only |
-| LightFM (hybrid) | `models/content_lightFM.py` | WARP loss + content item features |
+| Content-Based | `models/content_based.py` | SentenceTransformer embeddings over title + genres + year, cosine similarity / FAISS |
+| SVD | `models/svd_model.py` | Classic matrix factorization (scipy truncated SVD) |
+| LightFM | `models/lightfm_model.py` | Factorization machines, WARP loss, interaction data only |
 | LightGCN | `models/lightgcn_model.py` | Graph convolution over the user-item bipartite graph, BPR loss |
 
 Cold-start users are handled separately by `models/cold_start_questionnaire.py`
@@ -74,14 +74,13 @@ recorded results: [models/README.md](models/README.md).
 python evaluation/compare_models.py
 ```
 
-Runs all four models on the same train/test split (80/20 per user) and
-reports Precision@K, Recall@K, NDCG@K for K = 10, 20; RMSE/MAE are also
-reported for the two LightFM variants (their scores can be normalized to a
-1–5 scale, unlike the ranking-only LightGCN and content-based models).
-Metric implementations: `evaluation/metrics.py`.
+Runs Content-Based, SVD, LightFM, and LightGCN on the exact same
+preprocessed data (implicit interactions, rating >= 4.0, 80/20 split per
+user) and reports Precision@K, Recall@K, NDCG@K for K = 10, 20 — the same
+protocol every model's own script uses standalone, so results are directly
+comparable. Metric implementations: `evaluation/metrics.py`.
 
-Recorded results from prior runs are in [models/README.md](models/README.md)
-and [models/README_lightFMresults.md](models/README_lightFMresults.md).
+Details and the shared protocol: [models/README.md](models/README.md).
 
 ## Demo
 

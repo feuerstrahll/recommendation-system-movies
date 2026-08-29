@@ -147,34 +147,34 @@ def recommend_content_based(movies, seed_movie_id, n=12):
 
 @st.cache_resource(show_spinner="Обучаем коллаборативную модель (SVD)...")
 def fit_svd_model(ratings_hash_key):
-    """SVD via scipy sparse truncated SVD over the user-item ratings matrix."""
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.linalg import svds
+    """
+    SVD via models/svd_model.py's train_svd(), so the app uses the same
+    factorization as the lab's SVD baseline (evaluation/compare_models.py)
+    instead of a second, differently-tuned implementation.
+
+    Note: unlike svd_model.py's own evaluation pipeline (which trains on
+    implicit rating>=4.0 interactions), here we keep the app's explicit
+    ratings — the app needs item_factors trained on the full catalog, then
+    projects an ad-hoc user vector from the current profile's own ratings
+    (see recommend_collaborative), including profiles/users that were never
+    part of ratings.csv at all.
+    """
+    import sys
+    sys.path.insert(0, str(ROOT / "models"))
+    from svd_model import train_svd
 
     ratings = load_ratings()
     if ratings.empty:
         return None
 
-    users = ratings["user_id"].unique()
-    items = ratings["movie_id"].unique()
-    user_map = {u: i for i, u in enumerate(users)}
-    item_map = {m: i for i, m in enumerate(items)}
-    item_inv = {i: m for m, i in item_map.items()}
-
-    rows = ratings["user_id"].map(user_map).values
-    cols = ratings["movie_id"].map(item_map).values
-    vals = ratings["rating"].values.astype(np.float32)
-
-    matrix = csr_matrix((vals, (rows, cols)), shape=(len(users), len(items)))
-    k = min(50, min(matrix.shape) - 1)
-    u, s, vt = svds(matrix, k=k)
+    train_df = ratings[["user_id", "movie_id"]].drop_duplicates()
+    user_factors, item_factors, user_map, item_map, item_inv = train_svd(train_df)
     return {
         "user_map": user_map,
         "item_map": item_map,
         "item_inv": item_inv,
-        "user_factors": u * s,
-        "item_factors": vt.T,
-        "global_mean": float(ratings["rating"].mean()),
+        "user_factors": user_factors,
+        "item_factors": item_factors,
     }
 
 

@@ -12,14 +12,20 @@ Processed CSVs key movies by `movie_id` (TMDB id). `ratings.csv` also has
 
 | File | What it does |
 |---|---|
-| `content_lightFM.py` | Content-based embeddings (SentenceTransformer over title + genres) combined with LightFM as a hybrid model, implicit feedback. |
+| `content_based.py` | Content-based strategy — SentenceTransformer embeddings over title + genres + release year, ranked by cosine similarity (FAISS if installed, brute-force otherwise). No collaborative signal, so it can recommend cold-start items. |
+| `svd_model.py` | SVD collaborative filtering — classic matrix factorization (scipy truncated SVD) on implicit interactions. |
 | `lightfm_model.py` | LightFM collaborative filtering — factorization machines on interaction data only, WARP loss. |
 | `lightgcn_model.py` | LightGCN — graph convolution over the user-item bipartite graph, BPR loss with negative sampling. |
 | `cold_start_questionnaire.py` | Mini-questionnaire (genres, favorite movies, release-era preference) → content-based recommendations for users with no rating history. |
 | `recommendation_router.py` | Routes a user to a strategy based on how many ratings they have. |
 | `cold_start_examples.py` | Runnable examples exercising the questionnaire and router. |
 | `model_creation.ipynb` | Exploratory notebook: SVD baseline, then FAISS-based content retrieval. |
-| `lightfm_roc_curve.png` | ROC curve from a LightFM evaluation run. |
+| `lightfm_roc_curve.png` | ROC curve from an earlier, exploratory LightFM run (see `README_lightFMresults.md`). |
+
+The four collaborative/content models (`content_based.py`, `svd_model.py`,
+`lightfm_model.py`, `lightgcn_model.py`) each have their own runnable
+`train_and_evaluate()`/`main()` and share one evaluation protocol — see
+below.
 
 ## User lifecycle and routing
 
@@ -31,7 +37,7 @@ by rating count:
 | New | 0 | Questionnaire → content-based | No history to collaborate on |
 | Cold start | 1–5 | Content-based | Still not enough signal for collaborative filtering |
 | Warm start | 5–20 | Hybrid (content + collaborative) | Some history, content still fills gaps |
-| Mature | 20+ | Collaborative (LightGCN / LightFM) | Enough history for full collaborative filtering |
+| Mature | 20+ | Collaborative (LightGCN / LightFM / SVD) | Enough history for full collaborative filtering |
 
 ```python
 from recommendation_router import UnifiedRecommendationRouter
@@ -54,23 +60,49 @@ router.record_user_rating(user_id=12345, movie_id=123, rating=4.5)
 python models/cold_start_questionnaire.py     # interactive: genres, favorite movies, era preference
 python models/recommendation_router.py         # demo of the full lifecycle
 python models/cold_start_examples.py           # non-interactive usage examples
+python models/content_based.py                 # content-based (SentenceTransformer + cosine/FAISS)
+python models/svd_model.py                     # SVD collaborative filtering
 python models/lightfm_model.py                 # LightFM collaborative filtering
-python models/content_lightFM.py               # content-based + LightFM hybrid
 python models/lightgcn_model.py                # LightGCN
 ```
 
-All scripts expect `data/processed/ratings.csv` (columns `userId`/`user_id`,
-`movieId`/`movie_id`, `rating` — LightGCN auto-renames `user_id`→`userId` if
-needed) and `data/processed/movies.csv`.
+All four scripts expect `data/processed/ratings.csv` (`user_id`, `movie_id`,
+`rating` — LightGCN's internal helper renames these to `userId`/`movieId`)
+and `data/processed/movies.csv`. `content_based.py` also needs the FAISS
+package to build an index (`pip install faiss-cpu`, in `requirements.txt`);
+without it, it falls back to brute-force cosine similarity automatically.
+
+## Shared evaluation protocol (SVD / LightFM / LightGCN)
+
+`svd_model.py`, `lightfm_model.py`, and `lightgcn_model.py` each implement
+the same preprocessing and evaluation pipeline independently (so each is
+runnable on its own), and `evaluation/compare_models.py` reuses the same
+functions to compare all three (plus content-based) on one shared split:
+
+- **Binarization**: `rating >= 4.0` counts as a positive interaction;
+  everything else is dropped. All three models train on implicit 0/1
+  feedback, not raw explicit ratings.
+- **Filtering**: only users with at least 5 positive interactions are kept.
+- **Split**: a strict 80/20 split **per user** (not a global random split),
+  so every user has both train and test rows.
+- **Evaluation**: items already in a user's train set are excluded from
+  their top-K at scoring time; test interactions on items never seen in
+  train (cold-start items with no learned embedding/factor) are dropped
+  from ground truth before computing metrics.
+- **Metrics**: Precision@K, Recall@K, NDCG@K for K = 10, 20 — the only
+  metrics reported. RMSE/MAE were dropped: with binarized interactions
+  there's no rating scale left to score predictions against.
 
 ## LightGCN details
 
 `lightgcn_model.py` provides:
 
-- `prepare_lightgcn_data()` — builds the user-item bipartite graph from ratings (filtered to `rating >= 4.0`).
+- `prepare_lightgcn_data()` — builds the user-item bipartite graph from ratings.
 - `LightGCN` — the model: K graph-convolution layers, embeddings averaged across layers.
-- `train_lightgcn()` — BPR loss with negative sampling.
-- `evaluate_model()` — Precision@K, Recall@K, NDCG@K.
+- `train_lightgcn()` — BPR loss with negative sampling; graph propagation runs once
+  per epoch (not once per mini-batch), with BPR loss computed in batches only to
+  bound memory, and one `backward()`/`optimizer.step()` per epoch.
+- `evaluate_model()` — Precision@K, Recall@K, NDCG@K on held-out data.
 
 Default parameters (in `main()`): `emb_dim=64`, `n_layers=3`, `lr=0.001`,
 `epochs=20`, `batch_size=1024`. Requires `torch>=2.0.0` and
@@ -93,29 +125,14 @@ repo root.
 
 ## Recorded results
 
-These are results from prior runs, not guaranteed to reproduce exactly
-(dataset sampling and training are stochastic). See
-[README_lightFMresults.md](README_lightFMresults.md) for the full LightFM
-run log.
+`README_lightFMresults.md` documents an early, exploratory LightFM run (ROC
+AUC ~0.73) that predates the shared evaluation protocol above and used a
+different, non-per-user split — it's kept as a historical log, not a
+number to compare against current runs.
 
-**LightFM** — ROC AUC (sampled 500 users): **0.7277**.
+For current, directly comparable Precision@K/Recall@K/NDCG@K across all
+four models on the same split, run:
 
-**LightGCN** — on a run over ~600K ratings (610 evaluated users):
-
-| K | Precision@K | Recall@K | NDCG@K |
-|---|---|---|---|
-| 10 | 0.0324 | 0.0652 | 0.0421 |
-| 20 | 0.0198 | 0.0823 | 0.0527 |
-
-For an apples-to-apples comparison across all four models on the same
-split, use `evaluation/compare_models.py` — see the root README.
-
-## Evaluation strategy notes
-
-- Content-based and LightGCN are ranking models; they are scored with
-  Precision@K, Recall@K, NDCG@K only.
-- LightFM outputs raw scores that can be normalized to a 1–5 scale, so it's
-  additionally scored with RMSE/MAE (see `evaluation/compare_models.py`).
-- LightGCN training is CPU-slow relative to LightFM (minutes vs. seconds on
-  this dataset size) because it iterates graph convolutions per epoch;
-  LightFM converges faster but does not model the graph structure directly.
+```powershell
+python evaluation/compare_models.py
+```
