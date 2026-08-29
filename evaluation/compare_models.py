@@ -35,9 +35,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
+
+os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 1))
+os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count() or 1))
+os.environ.setdefault("OPENBLAS_NUM_THREADS", str(os.cpu_count() or 1))
 
 import numpy as np
 import pandas as pd
@@ -321,7 +326,7 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
     model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
 
     t0 = time.perf_counter()
-    model.fit(train_matrix, epochs=epochs, num_threads=1, verbose=False)
+    model.fit(train_matrix, epochs=epochs, num_threads=os.cpu_count() or 1, verbose=False)
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
@@ -346,7 +351,7 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
         u_arr = np.full(n_items, u_internal, dtype=np.int32)
 
         t0 = time.perf_counter()
-        scores = model.predict(u_arr, all_item_internal, num_threads=1)
+        scores = model.predict(u_arr, all_item_internal, num_threads=os.cpu_count() or 1)
         inf_times.append(time.perf_counter() - t0)
 
         tr_items = train_sets.get(uid, set())
@@ -429,7 +434,7 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
     model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
 
     t0 = time.perf_counter()
-    model.fit(train_matrix, item_features=item_features, epochs=epochs, num_threads=1, verbose=False)
+    model.fit(train_matrix, item_features=item_features, epochs=epochs, num_threads=os.cpu_count() or 1, verbose=False)
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
@@ -454,7 +459,7 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
         u_arr = np.full(n_items, u_internal, dtype=np.int32)
 
         t0 = time.perf_counter()
-        scores = model.predict(u_arr, all_item_internal, item_features=item_features, num_threads=1)
+        scores = model.predict(u_arr, all_item_internal, item_features=item_features, num_threads=os.cpu_count() or 1)
         inf_times.append(time.perf_counter() - t0)
 
         tr_items = train_sets.get(uid, set())
