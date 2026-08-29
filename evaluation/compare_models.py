@@ -215,7 +215,7 @@ def evaluate_content_based(train_df, test_df, eval_users):
             continue
 
         t0 = time.perf_counter()
-        user_profile = item_matrix[tr_idx].mean(axis=0)
+        user_profile = np.asarray(item_matrix[tr_idx].mean(axis=0))
         scores = cos_sim(user_profile, item_matrix).flatten()
         inf_times.append(time.perf_counter() - t0)
 
