@@ -137,7 +137,7 @@ class LightGCN(nn.Module):
             edge_index,
             edge_weight,
             (n_nodes, n_nodes)
-        ).to(device)
+        ).coalesce().to(device)
 
         self._adj_cache = adj
         self._adj_cache_edge_index = edge_index
@@ -284,13 +284,14 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
 
             batch_loss = -F.logsigmoid(pos_scores - neg_scores).mean()
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             batch_loss.backward()
             optimizer.step()
 
             total_loss += batch_loss.item()
             n_batches += 1
-            pbar.set_postfix({'loss': f'{batch_loss.item():.4f}'})
+            if n_batches % 20 == 0:
+                pbar.set_postfix({'loss': f'{batch_loss.item():.4f}'})
 
         avg_loss = total_loss / n_batches if n_batches > 0 else 0
         losses_history.append(avg_loss)
