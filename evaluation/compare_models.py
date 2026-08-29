@@ -323,7 +323,7 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
     weights = np.ones(len(train_df), dtype=np.float32)
     train_matrix = coo_matrix((weights, (u_idx, i_idx)), shape=(n_users, n_items))
 
-    model = LightFM(no_components=64, learning_rate=0.01, loss="warp", random_state=RANDOM_SEED)
+    model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
 
     t0 = time.perf_counter()
     model.fit(train_matrix, epochs=epochs, num_threads=os.cpu_count() or 1, verbose=False)
@@ -425,28 +425,34 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
             import scipy.sparse as sp
             item_feature_rows.append(sp.csr_matrix((1, all_content_features.shape[1])))
 
+    from scipy.sparse import identity as sp_identity
     from scipy.sparse import vstack as sp_vstack
-    item_features = sp_vstack(item_feature_rows)  # (n_items, n_features)
+    from scipy.sparse import hstack as sp_hstack
+
+    genre_features = sp_vstack(item_feature_rows)  # (n_items, n_genre_features)
+    # LightFM estimates one embedding per feature COLUMN and sums them for an
+    # item's representation — passing only genre features means every item's
+    # embedding is entirely a function of its genre, so items sharing a genre
+    # become indistinguishable. Concatenating a per-item identity block keeps
+    # each item's own learnable embedding (same as the no-features/Collab
+    # case) in addition to the shared genre signal. Row-normalize (each
+    # item's feature weights sum to 1), matching lightfm.data.Dataset's
+    # build_item_features default, so the identity anchor and the genre
+    # signal are on comparable footing regardless of genre count per movie.
+    item_features = sp_hstack([sp_identity(n_items, format="csr"), genre_features]).tocsr()
+    row_sums = np.asarray(item_features.sum(axis=1)).flatten()
+    row_sums[row_sums == 0] = 1.0
+    item_features = item_features.multiply(1.0 / row_sums[:, None]).tocsr()
 
     u_idx = train_df["user_id"].map(user_map).values.astype(np.int32)
     i_idx = train_df["movie_id"].map(item_map).values.astype(np.int32)
     weights = np.ones(len(train_df), dtype=np.float32)
     train_matrix = coo_matrix((weights, (u_idx, i_idx)), shape=(n_users, n_items))
 
-    model = LightFM(
-            no_components=64,
-            learning_rate=0.05,    # back to the rate that works for Collab
-            item_alpha=0.001,      # keeps shared genre weights under control
-            user_alpha=0.0001,
-            loss="warp",
-            random_state=RANDOM_SEED,
-        )
+    model = LightFM(no_components=64, learning_rate=0.05, loss="warp", random_state=RANDOM_SEED)
 
     t0 = time.perf_counter()
     model.fit(train_matrix, item_features=item_features, epochs=epochs, num_threads=os.cpu_count() or 1, verbose=False)
-    probe = model.predict(np.zeros(1000, dtype=np.int32), np.arange(1000, dtype=np.int32),
-                        item_features=item_features)
-    print("score range:", np.nanmin(probe), np.nanmax(probe))
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
 
