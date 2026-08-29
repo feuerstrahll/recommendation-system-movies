@@ -403,7 +403,7 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
     # including them makes each item's feature row act like a noisy one-hot
     # item ID — it doesn't generalize across movies and adds weights that
     # slow WARP's convergence on the collaborative signal.
-    content_text = movies[text_col].astype(str).fillna("").tolist()
+    content_text = movies[text_col].fillna("").astype(str).tolist()
     tfidf_all = TfidfVectorizer(max_features=200, stop_words="english")
     all_content_features = tfidf_all.fit_transform(content_text)
     mid_to_content_row = {int(mid): i for i, mid in enumerate(movies[id_col])}

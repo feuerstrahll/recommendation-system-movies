@@ -62,7 +62,7 @@ def prepare_lightgcn_data(ratings_df, min_user_interactions=0):
     src = ratings_df['userId'].map(user_map).values
     dst = ratings_df['movieId'].map(item_map).values + n_users
     
-    edge_index = torch.tensor([src, dst], dtype=torch.long)
+    edge_index = torch.tensor(np.stack([src, dst]), dtype=torch.long)
     
     # Делаем граф неориентированным (двусторонние рёбра)
     edge_index_undirected = torch.cat([edge_index, edge_index[[1, 0]]], dim=1)

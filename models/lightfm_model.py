@@ -18,6 +18,7 @@ ROC AUC is reported as a secondary diagnostic only (see note at the bottom):
 imperfect proxy for implicit-feedback ranking quality.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -148,7 +149,7 @@ def train_and_evaluate(min_user_interactions=5, epochs=5):
         loss="warp",
         random_state=RANDOM_SEED,
     )
-    model.fit(train_interactions, epochs=epochs, num_threads=1, verbose=True)
+    model.fit(train_interactions, epochs=epochs, num_threads=os.cpu_count() or 1, verbose=True)
 
     # Test items unseen in train can never be recommended (no item embedding) —
     # drop them from ground truth, same as lightgcn_model.py's main().
@@ -167,7 +168,7 @@ def train_and_evaluate(min_user_interactions=5, epochs=5):
         if user_id not in user_id_map or not relevant:
             continue
         u_idx = user_id_map[user_id]
-        scores = model.predict(np.full(len(all_item_idx), u_idx, dtype=np.int32), all_item_idx, num_threads=1)
+        scores = model.predict(np.full(len(all_item_idx), u_idx, dtype=np.int32), all_item_idx, num_threads=os.cpu_count() or 1)
 
         seen = train_seen.get(user_id, set())
         order = np.argsort(scores)[::-1]
@@ -201,7 +202,7 @@ def train_and_evaluate(min_user_interactions=5, epochs=5):
     test_i = test_df_known["movie_id"].map(item_id_map).values.astype(np.int32)
     test_interactions = coo_matrix((np.ones(len(test_u), dtype=np.float32), (test_u, test_i)), shape=shape)
 
-    auc = auc_score(model, test_interactions, train_interactions=train_interactions, num_threads=1)
+    auc = auc_score(model, test_interactions, train_interactions=train_interactions, num_threads=os.cpu_count() or 1)
     final_auc_score = float(auc.mean())
     print(f"ROC AUC Score (macro average over {len(auc)} users): {final_auc_score:.4f}")
 
