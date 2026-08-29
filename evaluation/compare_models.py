@@ -435,9 +435,9 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
 
     model = LightFM(
             no_components=64,
-            learning_rate=0.01,   # was 0.05 — too hot for shared feature embeddings
-            item_alpha=0.001,     # L2 on item + feature embeddings (default 1e-5 is far too small)
-            user_alpha=0.001,
+            learning_rate=0.05,    # back to the rate that works for Collab
+            item_alpha=0.001,      # keeps shared genre weights under control
+            user_alpha=0.0001,
             loss="warp",
             random_state=RANDOM_SEED,
         )
