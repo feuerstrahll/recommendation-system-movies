@@ -9,9 +9,9 @@ Movie dataset preparation, a PostgreSQL/SQLite schema, and four recommendation
 approaches (content-based, SVD, LightFM, LightGCN) built on
 [The Movies Dataset](https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset).
 
-This branch (`feature/dev`) holds active development: model implementations,
-database tooling, evaluation, and a Streamlit UI. The `main` branch holds an
-earlier baseline (SVD + FAISS hybrid recommender) and is kept as-is.
+This is the active development branch: model implementations, database
+tooling, evaluation, and a Streamlit UI. `main` was merged to match this
+branch; see [CONTRIBUTING.md](CONTRIBUTING.md) for the current workflow.
 
 ## Table of Contents
 
