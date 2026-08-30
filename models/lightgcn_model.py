@@ -233,12 +233,18 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
         user_embs, item_embs: обученные эмбеддинги
     """
     rng = np.random.RandomState(seed)
-    # weight_decay: LightFM regularizes via its own loss (item_alpha/user_alpha
-    # equivalents); LightGCN's Adam here had none, so add a small L2 penalty
-    # for comparable generalization pressure — cheap (one extra term per
-    # optimizer.step(), no extra forward/backward) and standard practice for
-    # graph embeddings, which can otherwise overfit high-degree nodes.
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    # NOTE: weight_decay was tried here (to match LightFM's item_alpha/
+    # user_alpha-style regularization) and reproducibly broke training:
+    # BPR gradients are very weak in early epochs (pos/neg scores start
+    # near-identical), and even weight_decay=1e-4 was enough for Adam's
+    # decay term to dominate the real gradient signal, pinning the loss at
+    # ln(2) (~0.693 — i.e. zero net separation between positive and
+    # negative scores) for the entire run. Confirmed by isolating
+    # weight_decay from the LR schedule below: the schedule alone still
+    # learns fine, weight_decay alone reproduces the frozen loss. Do not
+    # re-add weight_decay without re-validating the loss curve actually
+    # decreases across a full run.
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # Cosine decay over the fixed epoch budget: same epoch count, same
     # compute per step, but later epochs take smaller, more precise steps
     # instead of overshooting at a constant lr — standard practice for
