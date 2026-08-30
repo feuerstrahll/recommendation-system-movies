@@ -1,0 +1,118 @@
+Logging this run to results/logs/run_20260830_141830.log
+========================================================================
+  СРАВНИТЕЛЬНАЯ ОЦЕНКА РЕКОМЕНДАТЕЛЬНЫХ СИСТЕМ
+========================================================================
+
+Loading & splitting data...
+  Positive interactions (rating >= 4.0): 7,608,221
+  Train: 5,984,633 | Test: 1,561,736
+  Users: 131,351 | Items: 27,966
+  Eval users: 300, K = [10, 20]
+
+[1/5] Content-Based (TF-IDF genres + title)...
+
+[2/5] SVD (matrix factorization baseline)...
+  Train time: 4.9s (k=50 latent factors)
+  ⚠️  Dropped 1653 test interactions on items unseen in train
+
+[3/5] LightFM Collaborative (WARP loss)...
+  Train time: 41.1s
+  ⚠️  Dropped 1653 test interactions on items unseen in train
+
+[4/5] LightFM Hybrid (WARP + TF-IDF item features)...
+  Train time: 108.4s
+  ⚠️  Dropped 1653 test interactions on items unseen in train
+
+[5/5] LightGCN (graph convolutional network, BPR loss)...
+Using device: cuda
+📊 Data prepared: 131351 users, 26461 items, 5984633 interactions
+Epoch 1/10 | Loss: 0.2897
+Epoch 5/10 | Loss: 0.2478
+Epoch 10/10 | Loss: 0.2472
+  Train time: 13051.5s
+  ⚠️  Dropped 1653 test interactions on items unseen in train
+
+========================================================================
+  МЕТРИКИ
+========================================================================
+                          P@10    P@20    R@10    R@20 NDCG@10 NDCG@20  MAP@10  MAP@20 Infer ms     Train s
+Content-Based (TF-IDF)  0.0030  0.0025  0.0050  0.0069  0.0037  0.0045  0.0012  0.0013   3.0494      0.0000
+SVD                     0.1387  0.1047  0.1766  0.2539  0.2137  0.2273  0.1237  0.1181   0.1177      4.8997
+LightFM Collab          0.1510  0.1180  0.1857  0.2726  0.2177  0.2353  0.1254  0.1226   2.0486     41.1121
+LightFM Hybrid          0.1410  0.1127  0.1559  0.2512  0.2025  0.2219  0.1201  0.1154   3.0183    108.4321
+LightGCN                0.0173  0.0177  0.0108  0.0289  0.0192  0.0241  0.0072  0.0066  12.6708  13051.5278
+
+========================================================================
+  LIGHTGCN LOSS CURVE (BPR loss, per epoch)
+========================================================================
+  0.2897, 0.2491, 0.2484, 0.2482, 0.2478, 0.2476, 0.2474, 0.2473, 0.2471, 0.2472
+  Last-epoch improvement: -0.0001 (plateaued — see RESULTS.md before treating epochs=10 as final)
+  ⚠️  Dropped 1653 test interactions on items unseen in train
+
+========================================================================
+  CATALOG COVERAGE (% of items ever recommended in top-20)
+========================================================================
+  Content-Based (TF-IDF)   7.4%  (1962/26461 items)
+  SVD                      1.9%  (509/26461 items)
+  LightFM Collab           2.7%  (720/26461 items)
+  LightFM Hybrid           2.7%  (726/26461 items)
+  LightGCN                 7.4%  (1960/26461 items)
+
+========================================================================
+  PERFORMANCE BY USER INTERACTION COUNT (cold/light/heavy)
+========================================================================
+
+  Content-Based (TF-IDF):
+                 n_users      P@10      R@10   NDCG@10
+  cold (5-9)        59.0  0.001695  0.008475  0.005196
+  light (10-19)     78.0  0.002564  0.005769  0.002836
+  heavy (20+)      139.0  0.004317  0.003894  0.004206
+
+  SVD:
+                 n_users      P@10      R@10   NDCG@10
+  cold (5-9)        59.0  0.049153  0.197740  0.159724
+  light (10-19)     78.0  0.076923  0.202778  0.172410
+  heavy (20+)      139.0  0.229496  0.151007  0.277362
+
+  LightFM Collab:
+                 n_users      P@10      R@10   NDCG@10
+  cold (5-9)        59.0  0.044068  0.183616  0.133300
+  light (10-19)     78.0  0.084615  0.223932  0.186503
+  heavy (20+)      139.0  0.253957  0.164804  0.288902
+
+  LightFM Hybrid:
+                 n_users      P@10      R@10   NDCG@10
+  cold (5-9)        59.0  0.042373  0.175141  0.135065
+  light (10-19)     78.0  0.065385  0.170299  0.147127
+  heavy (20+)      139.0  0.246763  0.152166  0.287369
+
+  LightGCN:
+                 n_users      P@10      R@10   NDCG@10
+  cold (5-9)        59.0  0.000000  0.000000  0.000000
+  light (10-19)     78.0  0.005128  0.013248  0.010541
+  heavy (20+)      139.0  0.034532  0.015926  0.035521
+
+========================================================================
+  АНАЛИЗ ПРИГОДНОСТИ ДЛЯ ПРОДАКШЕНА
+========================================================================
+                                    Cold Start Масштабируемость Real-Time            Обновление Сложность
+Content-Based (TF-IDF)                 Отлично     Хорошая O(I)        Да  Простое (метаданные)    Низкая
+SVD                                      Плохо   Средняя O(U×I)       Нет          Переобучение    Низкая
+LightFM Collab                           Плохо   Средняя O(U×I)       Нет          Переобучение   Средняя
+LightFM Hybrid          Хорошо (item features)          Средняя  Частично          Переобучение   Средняя
+LightGCN                                 Плохо     Средняя O(E)       Нет        Дорогое (граф)   Высокая
+
+========================================================================
+  ПРИМЕЧАНИЯ
+========================================================================
+Protocol:  SVD, LightFM и LightGCN обучены на ОДНОМ train_df — implicit
+           interactions (rating >= 4.0), пользователи с >= 5 лайками,
+           80/20 split per user. Метрики поэтому напрямую сравнимы.
+Infer ms:  время предсказания для одного пользователя (миллисекунды).
+Train s:   полное время обучения на train_df (секунды).
+
+========================================================================
+  SCORE DISTRIBUTION HISTOGRAMS (positive vs. negative)
+========================================================================
+  LightFM Collab           saved to results/score_hist_lightfm_collab.png
+  LightFM Hybrid           saved to results/score_hist_lightfm_hybrid.png
