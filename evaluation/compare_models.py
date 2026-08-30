@@ -29,11 +29,18 @@ train_df, produced by one shared preprocessing pipeline (load_and_split):
     (cold-start items with no embedding) are dropped from ground truth
     before scoring, on every model.
 
-Metrics for ALL models: Precision@K, Recall@K, NDCG@K  (K = 10, 20)
+Metrics for ALL models: Precision@K, Recall@K, NDCG@K, MAP@K  (K = 10, 20)
 
 RMSE/MAE are no longer reported: with binarized (0/1) interactions there is
 no rating scale left to normalize scores against, so a rating-prediction
 error metric isn't meaningful for any of the models here anymore.
+
+ROC-AUC is intentionally not part of this shared comparison (it is still
+reported as a secondary diagnostic by models/lightfm_model.py standalone):
+AUC compares scores across a user's whole candidate set globally, while
+P/R/NDCG/MAP all judge within a user's own ranked list, which fits how
+WARP/BPR-trained models are actually optimized. For LightFM specifically,
+two more targeted diagnostics are generated instead — see below.
 
 Beyond per-user ranking accuracy, two aggregate diagnostics are also
 reported, computed from the same top-K lists every model already produces
@@ -48,6 +55,12 @@ reported, computed from the same top-K lists every model already produces
     average can hide a model that only works well for heavy users, which
     matters here since the router's whole design assumes different models
     suit different lifecycle stages.
+
+For the two LightFM variants specifically, a score-distribution histogram
+(positive vs. a sampled set of negative item scores per user) is saved to
+results/score_hist_<model>.png — a diagnostic for a step-like/clustered ROC
+curve (score ties or clusters show up directly as spikes here, more
+intuitively than a single AUC scalar).
 
 Usage:
   python evaluation/compare_models.py
@@ -71,7 +84,7 @@ from scipy.sparse import coo_matrix
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from evaluation.metrics import precision_at_k, recall_at_k, ndcg_at_k
+from evaluation.metrics import precision_at_k, recall_at_k, ndcg_at_k, average_precision_at_k
 
 # ---------------------------------------------------------------------------
 # Config
@@ -196,6 +209,36 @@ def sample_eval_users(test_df: pd.DataFrame, n: int = N_EVAL_USERS) -> np.ndarra
     return np.random.choice(users, size=min(n, len(users)), replace=False)
 
 
+MAX_NEG_SAMPLES_PER_USER = 20
+
+
+def _collect_score_sample(store, scores, relevant, tr_items, item_map, rng):
+    """
+    Append this user's positive-item scores and a random sample of
+    negative-item scores into store["positive"]/store["negative"], for a
+    score-distribution histogram (positives vs. negatives). Diagnostic for
+    why a ROC curve looks step-like: score clusters/ties show up directly
+    as spikes here, more intuitively than an AUC scalar. Negatives are
+    sampled (capped at MAX_NEG_SAMPLES_PER_USER) rather than using every
+    non-relevant item, since there are always far more negatives than
+    positives per user and using all of them would make the negative
+    curve reflect the whole catalog's score distribution rather than a
+    comparably-sized sample.
+    """
+    pos_indices = [item_map[i] for i in relevant if i in item_map]
+    if pos_indices:
+        store["positive"].extend(scores[pos_indices].tolist())
+
+    neg_candidates = [
+        idx for item_id, idx in item_map.items()
+        if item_id not in relevant and item_id not in tr_items
+    ]
+    if neg_candidates:
+        n_sample = min(MAX_NEG_SAMPLES_PER_USER, len(neg_candidates))
+        neg_indices = rng.choice(neg_candidates, size=n_sample, replace=False)
+        store["negative"].extend(scores[neg_indices].tolist())
+
+
 # ---------------------------------------------------------------------------
 # Model 1: Content-Based (TF-IDF) — TF-IDF cosine similarity
 #
@@ -243,7 +286,7 @@ def evaluate_content_based(train_df, test_df, eval_users, top_k_store: dict | No
     test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_items = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
-    per_k: dict = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
+    per_k: dict = {k: {"precision": [], "recall": [], "ndcg": [], "map": []} for k in K_VALUES}
     inf_times = []
 
     for uid in eval_users:
@@ -272,12 +315,14 @@ def evaluate_content_based(train_df, test_df, eval_users, top_k_store: dict | No
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
+            per_k[k]["map"].append(average_precision_at_k(ranked, relevant, k))
 
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
+        result[f"MAP@{k}"] = float(np.mean(per_k[k]["map"]))
     result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
     result["Train s"] = 0.0
     return result
@@ -301,7 +346,7 @@ def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50, top_k_store
     test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
-    per_k = {k_: {"precision": [], "recall": [], "ndcg": []} for k_ in K_VALUES}
+    per_k = {k_: {"precision": [], "recall": [], "ndcg": [], "map": []} for k_ in K_VALUES}
     inf_times = []
 
     for uid in eval_users:
@@ -330,12 +375,14 @@ def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50, top_k_store
             per_k[k_]["precision"].append(precision_at_k(ranked, relevant, k_))
             per_k[k_]["recall"].append(recall_at_k(ranked, relevant, k_))
             per_k[k_]["ndcg"].append(ndcg_at_k(ranked, relevant, k_))
+            per_k[k_]["map"].append(average_precision_at_k(ranked, relevant, k_))
 
     result: dict = {}
     for k_ in K_VALUES:
         result[f"P@{k_}"] = float(np.mean(per_k[k_]["precision"]))
         result[f"R@{k_}"] = float(np.mean(per_k[k_]["recall"]))
         result[f"NDCG@{k_}"] = float(np.mean(per_k[k_]["ndcg"]))
+        result[f"MAP@{k_}"] = float(np.mean(per_k[k_]["map"]))
     result["Infer ms"] = float(np.mean(inf_times) * 1000) if inf_times else "N/A"
     result["Train s"] = train_time
     return result
@@ -345,7 +392,11 @@ def evaluate_svd(train_df, test_df, eval_users, n_factors: int = 50, top_k_store
 # Model 3: LightFM Collaborative
 # ---------------------------------------------------------------------------
 
-def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS, top_k_store: dict | None = None):
+def evaluate_lightfm_collab(
+    train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS,
+    top_k_store: dict | None = None,
+    score_sample_store: dict | None = None,
+):
     print("\n[3/5] LightFM Collaborative (WARP loss)...")
     from lightfm import LightFM
 
@@ -377,8 +428,9 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
     all_item_ids = list(item_map.keys())
     all_item_internal = np.array([item_map[m] for m in all_item_ids], dtype=np.int32)
 
-    per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
+    per_k = {k: {"precision": [], "recall": [], "ndcg": [], "map": []} for k in K_VALUES}
     inf_times = []
+    score_rng = np.random.RandomState(RANDOM_SEED)
 
     for uid in eval_users:
         if uid not in user_map:
@@ -402,17 +454,23 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
         ]
         if top_k_store is not None:
             top_k_store[uid] = ranked[:MAX_K]
+        if score_sample_store is not None:
+            _collect_score_sample(
+                score_sample_store, scores, relevant, tr_items, item_map, score_rng
+            )
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
+            per_k[k]["map"].append(average_precision_at_k(ranked, relevant, k))
 
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
+        result[f"MAP@{k}"] = float(np.mean(per_k[k]["map"]))
     result["Infer ms"] = float(np.mean(inf_times) * 1000)
     result["Train s"] = train_time
     return result
@@ -422,7 +480,11 @@ def evaluate_lightfm_collab(train_df, test_df, eval_users, epochs: int = LIGHTFM
 # Model 4: LightFM Hybrid (collaborative + TF-IDF item features)
 # ---------------------------------------------------------------------------
 
-def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS, top_k_store: dict | None = None):
+def evaluate_lightfm_hybrid(
+    train_df, test_df, eval_users, epochs: int = LIGHTFM_EPOCHS,
+    top_k_store: dict | None = None,
+    score_sample_store: dict | None = None,
+):
     print("\n[4/5] LightFM Hybrid (WARP + TF-IDF item features)...")
     from lightfm import LightFM
     from scipy.sparse import csr_matrix
@@ -505,8 +567,9 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
     all_item_ids = list(item_map.keys())
     all_item_internal = np.array([item_map[m] for m in all_item_ids], dtype=np.int32)
 
-    per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
+    per_k = {k: {"precision": [], "recall": [], "ndcg": [], "map": []} for k in K_VALUES}
     inf_times = []
+    score_rng = np.random.RandomState(RANDOM_SEED)
 
     for uid in eval_users:
         if uid not in user_map:
@@ -530,17 +593,23 @@ def evaluate_lightfm_hybrid(train_df, test_df, eval_users, epochs: int = LIGHTFM
         ]
         if top_k_store is not None:
             top_k_store[uid] = ranked[:MAX_K]
+        if score_sample_store is not None:
+            _collect_score_sample(
+                score_sample_store, scores, relevant, tr_items, item_map, score_rng
+            )
 
         for k in K_VALUES:
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
+            per_k[k]["map"].append(average_precision_at_k(ranked, relevant, k))
 
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
+        result[f"MAP@{k}"] = float(np.mean(per_k[k]["map"]))
     result["Infer ms"] = float(np.mean(inf_times) * 1000)
     result["Train s"] = train_time
     return result
@@ -605,7 +674,7 @@ def evaluate_lightgcn(
     test_rel = test_df_known.groupby("user_id")["movie_id"].apply(set).to_dict()
     train_sets = train_df.groupby("user_id")["movie_id"].apply(set).to_dict()
 
-    per_k = {k: {"precision": [], "recall": [], "ndcg": []} for k in K_VALUES}
+    per_k = {k: {"precision": [], "recall": [], "ndcg": [], "map": []} for k in K_VALUES}
 
     # Batched scoring + torch.topk instead of a per-user Python loop with a
     # full argsort over all n_items: one matmul over every eval user at
@@ -651,12 +720,14 @@ def evaluate_lightgcn(
             per_k[k]["precision"].append(precision_at_k(ranked, relevant, k))
             per_k[k]["recall"].append(recall_at_k(ranked, relevant, k))
             per_k[k]["ndcg"].append(ndcg_at_k(ranked, relevant, k))
+            per_k[k]["map"].append(average_precision_at_k(ranked, relevant, k))
 
     result: dict = {}
     for k in K_VALUES:
         result[f"P@{k}"] = float(np.mean(per_k[k]["precision"]))
         result[f"R@{k}"] = float(np.mean(per_k[k]["recall"]))
         result[f"NDCG@{k}"] = float(np.mean(per_k[k]["ndcg"]))
+        result[f"MAP@{k}"] = float(np.mean(per_k[k]["map"]))
     # Infer ms is now the amortized per-user cost of one batched matmul +
     # topk over all eval users, not a separately timed single-vector matmul
     # per user (that per-user loop was the thing being vectorized away) —
@@ -779,6 +850,46 @@ def compute_segment_metrics(top_k_store: dict, test_rel: dict, train_counts: dic
     return segment_results
 
 
+RESULTS_DIR = Path(__file__).parent.parent / "results"
+
+
+def plot_score_histogram(model_name: str, score_sample: dict, out_dir: Path = RESULTS_DIR) -> Path | None:
+    """
+    Overlaid histogram of raw prediction scores for positive vs. sampled
+    negative items. Diagnostic for a step-like/clustered ROC curve: score
+    ties or clusters (e.g. many items scoring near-identically) show up
+    directly as spikes here, which a single AUC number can't reveal.
+    Returns the saved file path, or None if there's nothing to plot.
+    """
+    positive = score_sample.get("positive", [])
+    negative = score_sample.get("negative", [])
+    if not positive and not negative:
+        return None
+
+    import matplotlib
+    matplotlib.use("Agg")  # headless — no display available on a training server
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bins = 40
+    if negative:
+        ax.hist(negative, bins=bins, alpha=0.6, label=f"negative (n={len(negative)})", color="tab:blue", density=True)
+    if positive:
+        ax.hist(positive, bins=bins, alpha=0.6, label=f"positive (n={len(positive)})", color="tab:orange", density=True)
+    ax.set_xlabel("Predicted score")
+    ax.set_ylabel("Density")
+    ax.set_title(f"{model_name}: predicted score distribution (positive vs. negative)")
+    ax.legend()
+    fig.tight_layout()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = model_name.lower().replace(" ", "_")
+    out_path = out_dir / f"score_hist_{safe_name}.png"
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    return out_path
+
+
 def run_comparison(
     n_eval_users: int = N_EVAL_USERS,
     models: list[str] | None = None,
@@ -808,17 +919,22 @@ def run_comparison(
     if "svd" in selected_models:
         top_k_stores["SVD"] = {}
         results["SVD"] = evaluate_svd(train_df, test_df, eval_users, top_k_store=top_k_stores["SVD"])
+    score_sample_stores: dict = {}
     if "lightfm_collab" in selected_models:
         top_k_stores["LightFM Collab"] = {}
+        score_sample_stores["LightFM Collab"] = {"positive": [], "negative": []}
         results["LightFM Collab"] = evaluate_lightfm_collab(
             train_df, test_df, eval_users, epochs=lightfm_epochs,
             top_k_store=top_k_stores["LightFM Collab"],
+            score_sample_store=score_sample_stores["LightFM Collab"],
         )
     if "lightfm_hybrid" in selected_models:
         top_k_stores["LightFM Hybrid"] = {}
+        score_sample_stores["LightFM Hybrid"] = {"positive": [], "negative": []}
         results["LightFM Hybrid"] = evaluate_lightfm_hybrid(
             train_df, test_df, eval_users, epochs=lightfm_epochs,
             top_k_store=top_k_stores["LightFM Hybrid"],
+            score_sample_store=score_sample_stores["LightFM Hybrid"],
         )
     lightgcn_loss_history: list = []
     if "lightgcn" in selected_models:
@@ -834,6 +950,7 @@ def run_comparison(
         [f"P@{k}" for k in K_VALUES]
         + [f"R@{k}" for k in K_VALUES]
         + [f"NDCG@{k}" for k in K_VALUES]
+        + [f"MAP@{k}" for k in K_VALUES]
         + ["Infer ms", "Train s"]
     )
     df = pd.DataFrame(results).T
@@ -909,6 +1026,15 @@ def run_comparison(
         "Infer ms:  время предсказания для одного пользователя (миллисекунды).\n"
         "Train s:   полное время обучения на train_df (секунды)."
     )
+
+    if score_sample_stores:
+        print("\n" + "=" * 72)
+        print("  SCORE DISTRIBUTION HISTOGRAMS (positive vs. negative)")
+        print("=" * 72)
+        for name, sample in score_sample_stores.items():
+            path = plot_score_histogram(name, sample)
+            if path is not None:
+                print(f"  {name:<24s} saved to {path}")
 
     return df
 

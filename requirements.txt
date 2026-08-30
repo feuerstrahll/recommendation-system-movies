@@ -10,4 +10,5 @@ tqdm>=4.65
 lightfm
 sentence-transformers
 faiss-cpu
+matplotlib>=3.7
 
