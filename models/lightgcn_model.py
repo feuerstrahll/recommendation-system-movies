@@ -16,6 +16,18 @@ from pathlib import Path
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
+# Single source of truth for LightGCN's model/training config. Both
+# standalone main() below and evaluation/compare_models.py's
+# evaluate_lightgcn import and use these, instead of each hardcoding its
+# own copy — two independent copies previously drifted out of sync (e.g.
+# batch_size) without anyone noticing until results looked inconsistent.
+EMB_DIM = 64
+N_LAYERS = 3
+LR = 0.001
+EPOCHS = 10
+BATCH_SIZE = 8192
+SEED = 42
+
 # ==========================================================
 # 1. ПОДГОТОВКА ДАННЫХ (Pandas -> PyG Graph)
 # ==========================================================
@@ -94,7 +106,7 @@ class LightGCN(nn.Module):
     - Усреднением эмбеддингов всех слоёв
     """
     
-    def __init__(self, n_users, n_items, emb_dim=64, n_layers=3):
+    def __init__(self, n_users, n_items, emb_dim=EMB_DIM, n_layers=N_LAYERS):
         super().__init__()
         self.n_users = n_users
         self.n_items = n_items
@@ -224,7 +236,7 @@ def _sample_negatives_vectorized(pos_idx_sets, n_items, rng):
 
 def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
                    user_map, item_map,
-                   lr=0.001, epochs=20, batch_size=1024, neg_samples=1, seed=42):
+                   lr=LR, epochs=EPOCHS, batch_size=BATCH_SIZE, neg_samples=1, seed=SEED):
     """
     Обучение LightGCN с BPR (Bayesian Personalized Ranking) loss.
 
@@ -532,12 +544,17 @@ def main():
     test_gt_dict = test_df_known_items.groupby('userId')['movieId'].apply(list).to_dict()
 
     # Инициализация модели
+    # Seed before construction: LightGCN.__init__ draws from torch's RNG via
+    # nn.init.normal_, so seeding after construction wouldn't affect the
+    # initial embeddings — same reasoning as evaluate_lightgcn in
+    # compare_models.py, which seeds for the same reason.
+    torch.manual_seed(SEED)
     print("\n🏗️  Building LightGCN model...")
     model = LightGCN(
         n_users=n_users,
         n_items=n_items,
-        emb_dim=64,      # размер эмбеддинга
-        n_layers=3       # количество GCN слоёв
+        emb_dim=EMB_DIM,
+        n_layers=N_LAYERS,
     )
     print(f"✓ Model ready: {sum(p.numel() for p in model.parameters())} parameters")
 
@@ -551,10 +568,10 @@ def main():
         n_items,
         user_map,
         item_map,
-        lr=0.001,
-        epochs=20,
-        batch_size=1024,
-        seed=42
+        lr=LR,
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        seed=SEED
     )
 
     # Оценка на held-out test-взаимодействиях; seen_items=train_gt_dict исключает

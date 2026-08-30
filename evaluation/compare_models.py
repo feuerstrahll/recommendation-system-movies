@@ -632,7 +632,10 @@ def evaluate_lightgcn(
     print("\n[5/5] LightGCN (graph convolutional network, BPR loss)...")
     try:
         import torch
-        from models.lightgcn_model import LightGCN, prepare_lightgcn_data, train_lightgcn
+        from models.lightgcn_model import (
+            LightGCN, prepare_lightgcn_data, train_lightgcn,
+            EMB_DIM, N_LAYERS, LR, EPOCHS, BATCH_SIZE, SEED,
+        )
     except ImportError as exc:
         print(f"  Skipping LightGCN: {exc}")
         na = {f"P@{k}": "N/A" for k in K_VALUES}
@@ -656,24 +659,26 @@ def evaluate_lightgcn(
     # embeddings via nn.init.normal_, which draws from torch's RNG. Seeding
     # inside train_lightgcn would be too late — the model (and its random
     # initial embeddings) is already built by the time train_lightgcn runs.
-    torch.manual_seed(RANDOM_SEED)
+    torch.manual_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LightGCN(n_users=n_users, n_items=n_items, emb_dim=64, n_layers=3).to(device)
+    model = LightGCN(n_users=n_users, n_items=n_items, emb_dim=EMB_DIM, n_layers=N_LAYERS).to(device)
 
-    # epochs=10 is now comparable to LightFM's epochs=10: train_lightgcn
-    # samples a (pos, neg) pair for EVERY positive interaction of every user
-    # each epoch (not one triple per user total), so one LightGCN epoch and
-    # one LightFM epoch both mean "one pass over every positive interaction"
-    # — deliberately equalized, not copy-pasted from LightFM's default.
+    # EPOCHS=10 is comparable to LightFM's epochs=10: train_lightgcn samples
+    # a (pos, neg) pair for EVERY positive interaction of every user each
+    # epoch (not one triple per user total), so one LightGCN epoch and one
+    # LightFM epoch both mean "one pass over every positive interaction" —
+    # deliberately equalized, not copy-pasted from LightFM's default.
     #
-    # batch_size=2048 (down from 8192): smaller batches mean noisier
-    # per-step gradients, which can help escape the kind of plateau this
-    # model was landing in — tradeoff is more optimizer.step() calls per
-    # epoch (slower), acceptable at epochs=10.
+    # Model/training config (EMB_DIM, N_LAYERS, LR, EPOCHS, BATCH_SIZE, SEED)
+    # comes from models/lightgcn_model.py, the single source of truth also
+    # used by that module's standalone main() — don't hardcode a second copy
+    # of these values here; a batch_size=2048 override once drifted silently
+    # out of sync with main()'s batch_size=8192 until someone noticed the
+    # runtime difference (~3.6h vs. ~1h).
     t0 = time.perf_counter()
     user_embs, item_embs, losses = train_lightgcn(
         model, edge_index, gt_dict, n_users, n_items,
-        user_map, item_map, lr=0.001, epochs=10, batch_size=2048,
+        user_map, item_map, lr=LR, epochs=EPOCHS, batch_size=BATCH_SIZE,
     )
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")
