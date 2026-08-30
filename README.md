@@ -140,17 +140,38 @@ Metric implementations: `evaluation/metrics.py`.
 | Model | P@10 | R@10 | NDCG@10 | Train time |
 |---|---:|---:|---:|---:|
 | Content-Based (TF-IDF) | 0.0030 | 0.0050 | 0.0037 | 0.0s |
-| SVD | 0.1387 | **0.1766** | 0.2137 | **4.2s** |
-| **LightFM Collab** | **0.1490** | 0.1760 | **0.2178** | 36.3s |
-| LightFM Hybrid | 0.1440 | 0.1652 | 0.2038 | 99.9s |
-| LightGCN | 0.1133 | 0.1393 | 0.1592 | 3310.7s |
+| SVD | 0.1387 | **0.1766** | 0.2137 | **4.9s** |
+| **LightFM Collab** | **0.1510** | 0.1857 | **0.2177** | 41.1s |
+| LightFM Hybrid | 0.1410 | 0.1559 | 0.2025 | 108.4s |
+| LightGCN | 0.0173 | 0.0108 | 0.0192 | 13051.5s |
 
 LightFM Collaborative wins on ranking accuracy; SVD is within 2% of it at a
-fraction of the training/inference cost. Full metrics (P@10/20, R@10/20,
-NDCG@10/20, inference latency), methodology, discussion of the LightGCN and
-LightFM Hybrid numbers, a production-fit table, and known limitations of
-this run: **[RESULTS.md](RESULTS.md)**. Raw per-run numbers:
+fraction of the training/inference cost. LightGCN is not production-ready —
+a recent round of tuning (embedding normalization, smaller batches) made it
+*worse*, not better, including zero correct recommendations for every
+cold-start user in this run; see RESULTS.md for the full regression
+analysis. Full metrics (P/R/NDCG/MAP@10/20, catalog coverage, cold/light/
+heavy user segments, LightFM score-distribution diagnostics, methodology,
+and known limitations): **[RESULTS.md](RESULTS.md)**. Raw per-run numbers:
 [results/metrics.csv](results/metrics.csv).
+
+**Score distribution diagnostic (LightFM):** ROC-AUC alone can hide *why*
+a model separates positives from negatives poorly — a step-like or
+clustered ROC curve usually means score ties or clusters somewhere in the
+distribution, which a single AUC number won't show. These histograms plot
+each model's raw predicted scores for held-out positive items against a
+sampled set of negative items, so separation quality is visible directly:
+
+| LightFM Collab | LightFM Hybrid |
+|---|---|
+| ![LightFM Collab score distribution](results/score_hist_lightfm_collab.png) | ![LightFM Hybrid score distribution](results/score_hist_lightfm_hybrid.png) |
+
+Both show clean, well-separated, unimodal positive/negative distributions
+with a modest overlap region — no clustering or step artifacts. This was
+checked specifically because an older, unrelated exploratory run
+(`models/lightfm_roc_curve.png`, predating the current evaluation protocol)
+had a visibly step-like ROC curve; these histograms confirm that artifact
+doesn't reproduce under the current pipeline.
 
 ## Demo & Screenshots
 
