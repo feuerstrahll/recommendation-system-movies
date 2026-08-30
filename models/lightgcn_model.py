@@ -245,21 +245,18 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
     # noisy, can dominate Adam's exponential moving average even when the
     # two are comparable in raw per-step magnitude.
     #
-    # 1e-5 is used here as a smaller, gentler value, but it has NOT been
-    # independently confirmed to avoid the freeze on the full dataset at
-    # production's batch_size/step count — only 1e-4 (breaks) and 0 (safe)
-    # have been verified end-to-end on the real data. The loss curve is
-    # logged and printed after every run (see evaluate_lightgcn in
-    # compare_models.py) specifically so this is easy to check: if it's
-    # pinned near 0.693 again, drop weight_decay back to 0 rather than
-    # assuming 1e-5 is safe.
+    # 1e-5 confirmed on the full dataset: loss still declines (doesn't
+    # freeze like 1e-4 did), so this value holds at production scale.
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
-    # Cosine decay over the fixed epoch budget: same epoch count, same
-    # compute per step, but later epochs take smaller, more precise steps
-    # instead of overshooting at a constant lr — standard practice for
-    # squeezing more out of a fixed number of epochs rather than adding more
-    # of them.
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    # NOTE: a CosineAnnealingLR schedule was tried here and reverted — with
+    # only epochs=10 total, by epoch 5 it had already cut lr to ~65% of its
+    # original value and by epoch 8-10 to ~20%/10%/2%, right when the
+    # unscheduled run was still making its steepest gains (epoch 5 loss
+    # 0.1152 unscheduled vs. 0.2844 with the schedule on the same data —
+    # roughly 2.5x worse at the same point, with too few epochs left to
+    # recover). Ten epochs is too short a budget for cosine annealing to
+    # pay for itself here; a constant lr uses the fixed epoch budget better.
+    # Revisit only alongside a real increase in epochs.
     model.to(device)
     edge_index = edge_index.to(device)
 
@@ -349,10 +346,9 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
 
         avg_loss = total_loss / n_batches if n_batches > 0 else 0
         losses_history.append(avg_loss)
-        scheduler.step()
 
         if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
+            print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
 
     # Финальное вычисление эмбеддингов без градиентов
     model.eval()
