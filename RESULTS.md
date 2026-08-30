@@ -8,17 +8,25 @@
 ## Executive Summary
 
 Across five recommendation approaches evaluated on 131K users and 26K movies
-from the combined MovieLens/TMDB dataset, **LightFM Collaborative Filtering**
-remains the best all-around ranker (NDCG@10 = 0.218), with **SVD** a close,
-much cheaper second (NDCG@10 = 0.214, ~8x faster to train, ~17x faster to
-score). **LightFM Hybrid** trails plain Collaborative filtering by a small,
+from the combined MovieLens/TMDB dataset, **LightFM Collaborative
+Filtering** is numerically best on every ranking metric, though the margin
+over **SVD** is small — on the same order as the run-to-run noise Collab
+itself shows (P@10 = 0.1490 vs. 0.1510 across two runs of the same config;
+see [Limitations](#limitations--future-work)). SVD trails by only ~2% on
+NDCG@10/MAP@10, though the gap is larger on other metrics (up to ~8% on
+P@10, ~7% on R@20) — at roughly 8x less training time and 17x less
+inference cost, it's a legitimate production choice, not just a baseline to
+beat. **LightFM Hybrid** trails plain Collaborative filtering by a small,
 consistent margin on these accuracy metrics — expected, since most
 evaluation users already have substantial history, so the hybrid's real
 advantage (serving cold-start items) doesn't show up in aggregate numbers
 computed mostly over warm users. **LightGCN remains the weakest model by a
-wide margin**, and a round of targeted fixes (L2-normalized embeddings,
-smaller batch size, added regularization) made it *worse*, not better — see
-[LightGCN update](#lightgcn-update-this-run-is-a-regression). For
+wide margin and is not production-ready**: even its best configuration so
+far trails SVD at roughly 790x the training cost, and the latest tuning
+round (L2-normalized embeddings and a smaller batch size, changed together
+in one commit) regressed it further (P@10 0.113 → 0.017), including zero
+hits for every user in the coldest lifecycle band (5-9 interactions) this
+run — see [LightGCN update](#lightgcn-update-this-run-is-a-regression). For
 production, we'd recommend **LightFM Collaborative** for accuracy-critical,
 established-user segments, **LightFM Hybrid** or **Content-Based** for
 cold/light users per the router's design, and **SVD** as a strong, much
@@ -115,10 +123,15 @@ interactions, light = 10-19, heavy = 20+):
 | LightFM Hybrid | 0.0424 | 0.0654 | 0.2468 |
 | LightGCN | **0.0000** | 0.0051 | 0.0345 |
 
-LightGCN scores **exactly 0.0 on cold users** (0/59 users got even one
-correct recommendation in their top-10) — the segment
-`models/recommendation_router.py`'s cold-start routing exists specifically
-to protect. Full segment tables (P@10/R@10/NDCG@10 per band, every model):
+LightGCN scores **exactly 0.0 in the eval's lowest interaction-count band
+(5-9 train interactions)** — 0/59 users in that band got even one correct
+recommendation in their top-10. These are *not* zero-history or true
+cold-start users: this benchmark's `MIN_USER_INTERACTIONS=5` filter (see
+[Methodology](#methodology)) excludes anyone with fewer than 5 interactions
+before evaluation even starts, so this "cold" band actually falls inside
+`models/recommendation_router.py`'s `WARM_START` stage (5-20 ratings), not
+its `COLD_START` (1-5) or `NEW` (0) stages — those are never measured here
+at all. Full segment tables (P@10/R@10/NDCG@10 per band, every model):
 [results/logs/run_20260830_141830.log](results/logs/run_20260830_141830.log).
 
 ## Score Distribution (LightFM diagnostic)
@@ -145,13 +158,18 @@ reproduce under the current pipeline.
 
 ## LightGCN Update: This Run Is a Regression
 
-Between the previous report and this run, LightGCN's training code changed:
-L2-normalized embeddings were added (`F.normalize` in `LightGCN.forward()`,
-motivated by unnormalized dot-product scores being biased toward popular,
-high-degree nodes), `batch_size` was lowered from 8192 to 2048 (hoping
-noisier gradients would escape a plateau), and `weight_decay=1e-5` was kept
-from an earlier fix (an initial `1e-4` had reproducibly frozen training
-entirely at loss ≈ ln(2), a separate, already-documented issue).
+Between the previous report and this run, LightGCN's training code changed
+in one commit: L2-normalized embeddings were added (`F.normalize` in
+`LightGCN.forward()`, motivated by unnormalized dot-product scores being
+biased toward popular, high-degree nodes) *and* `batch_size` was lowered
+from 8192 to 2048 (hoping noisier gradients would escape a plateau) at the
+same time; `weight_decay=1e-5` was unchanged from an earlier fix (an
+initial `1e-4` had reproducibly frozen training entirely at loss ≈ ln(2), a
+separate, already-documented issue). Because normalization and batch size
+changed together, **the regression below is attributed to this
+configuration as a whole, not isolated to either change individually** —
+that isolation is exactly what's missing and listed under
+[Limitations](#limitations--future-work).
 
 The result was worse across the board, not better:
 
@@ -160,44 +178,53 @@ The result was worse across the board, not better:
 | P@10 | 0.1133 | 0.0173 |
 | R@10 | 0.1393 | 0.0108 |
 | NDCG@10 | 0.1592 | 0.0192 |
-| Cold-user P@10 | (not measured yet) | **0.0000** |
+| P@10, 5-9 interaction band | (not measured yet) | **0.0000** |
 | Loss behavior | still declining at epoch 10 | **plateaued** by epoch 5 (0.2472 → 0.2482 → flat) |
 | Train time | 3,311s (~55 min) | 13,052s (~3.6h) |
 
-Candidate explanations, most to least likely:
+Candidate contributing factors — none isolated, since both changes shipped
+together (see the caveat above):
 
-1. **`batch_size=2048` cost more than it gave back.** More
+1. **`batch_size=2048` may have cost more than it gave back.** More
    `optimizer.step()` calls per epoch means the model saw the same total
-   data but with ~4x the wall-clock cost — and the loss *plateaued* this
-   time (confirmed by the run's own detection logic) rather than still
+   data but at ~4x the wall-clock cost — and the loss *plateaued* this time
+   (confirmed by the run's own detection logic) rather than still
    improving, meaning the extra time didn't even buy convergence progress.
    This mirrors the earlier finding that a too-aggressive change to the
    optimization schedule at a fixed epoch budget can trade real progress
    for a different (not better) local behavior — see the CosineAnnealingLR
    revert in git history for a similar pattern.
-2. **L2-normalization changes the loss landscape in ways not yet tuned
-   for.** Capping scores to cosine similarity range ([-1, 1] per pair)
-   changes the effective scale BPR's `logsigmoid` operates on; `lr=0.001`
-   was never re-tuned for this normalized regime, and a learning rate
-   suited to unbounded dot products may now be poorly scaled for
+2. **L2-normalization may have changed the loss landscape in ways not yet
+   tuned for.** Capping scores to cosine similarity range ([-1, 1] per
+   pair) changes the effective scale BPR's `logsigmoid` operates on;
+   `lr=0.001` was never re-tuned for this normalized regime, and a learning
+   rate suited to unbounded dot products may now be poorly scaled for
    bounded cosine scores.
-3. **Interaction between normalization and `weight_decay`.** Both changes
-   landed in the same commit; it's untested whether L2-normalization alone
-   (without the batch_size change) would have behaved differently.
+3. **Possible interaction between normalization and `weight_decay`.**
+   Untested whether L2-normalization alone (at the original batch_size)
+   would have behaved differently.
+
+These are plausible mechanisms, not confirmed causes — with two changes
+landing in one commit, this run cannot distinguish which one (or their
+interaction) is responsible.
 
 **This is flagged as a regression, not shipped as an improvement.** The
 config that produced the *previous*, less-bad LightGCN numbers
 (`batch_size=8192`, no L2-normalization) is closer to what should be
-revisited, or a proper ablation (each change tested independently, not
-three at once) is needed before drawing conclusions about which of these
-three changes helped or hurt.
+revisited, or a proper ablation (each of the two changes tested
+independently, not together) is needed before drawing conclusions about
+which one helped or hurt.
 
 ## Discussion
 
-**SVD remains nearly as accurate as LightFM Collab at a fraction of the
-cost.** The NDCG@10 gap is under 2% relative, but SVD trains ~8x faster and
-predicts ~17x faster per user. If infrastructure cost or latency budget is
-tight, SVD is a legitimate production choice, not just a baseline to beat.
+**SVD remains close to LightFM Collab at a fraction of the cost, though
+"close" varies by metric.** The gap is ~2% relative on NDCG@10/MAP@10, but
+wider on others — up to ~8% on P@10, ~7% on R@20, ~3% on NDCG@20 (see the
+[Results](#results) table). SVD trains ~8x faster and predicts ~17x faster
+per user regardless. If infrastructure cost or latency budget is tight,
+SVD is a legitimate production choice, not just a baseline to beat —
+whether its accuracy trade-off is acceptable depends on which metric
+matters most for the product.
 
 **LightFM Hybrid's accuracy gap vs. Collab is expected given this eval's
 user mix, not a sign the item features are broken.** Genre features add a
@@ -205,8 +232,9 @@ real but modest signal on an eval sample of mostly warm/mature users, where
 LightFM Collab's pure collaborative signal is already strong. The hybrid's
 actual selling point — recommending items with sparse or no interaction
 history — isn't visible in an aggregate NDCG number computed mostly over
-users who don't need it; the cold-user segment table above (Hybrid P@10 =
-0.042 vs. Collab's 0.044 — statistically indistinguishable at n=59) doesn't
+users who don't need it; the 5-9-interaction segment table above (Hybrid
+P@10 = 0.042 vs. Collab's 0.044 — statistically indistinguishable at n=59,
+and neither is a true cold-start measurement, see above) doesn't
 yet show the expected hybrid advantage either, which is itself worth
 investigating further rather than assuming the hybrid's design is working
 as intended.
@@ -214,8 +242,9 @@ as intended.
 **LightGCN is not close to production-ready as currently configured.**
 Beyond the regression above, its fundamental problem across both runs is
 that whatever it has learned isn't beating even a 50-latent-factor SVD
-baseline that trains in under 5 seconds. Zero correct recommendations for
-every cold user in this run is disqualifying for a system whose whole
+baseline that trains in under 5 seconds — at roughly 790x the training
+cost in its best configuration so far. Zero correct recommendations in the
+5-9-interaction band in this run is disqualifying for a system whose whole
 design (per `models/recommendation_router.py`) depends on different models
 covering different lifecycle stages.
 
@@ -226,17 +255,20 @@ covering different lifecycle stages.
   the full log), and no need for item-features overhead here.
 - **Cold / light users:** Content-Based or LightFM Hybrid, per
   `models/recommendation_router.py`'s lifecycle routing — though this
-  run's cold-segment numbers don't yet show Hybrid clearly outperforming
-  Collab there, so this recommendation rests on the *design* argument
-  (only Hybrid/Content-Based can score cold-start items with no
-  interaction history at all) rather than a measured advantage in this
-  particular eval sample.
-- **Cost-constrained deployments:** SVD — within 2% of LightFM Collab's
-  NDCG@10 at a small fraction of the training and inference cost.
+  run's lower-interaction-band numbers don't yet show Hybrid clearly
+  outperforming Collab there, so this recommendation rests on the *design*
+  argument (only Hybrid/Content-Based can score items with no interaction
+  history at all, and only Content-Based can serve true zero-history
+  users) rather than a measured advantage in this particular eval sample.
+- **Cost-constrained deployments:** SVD — within a few percent of LightFM
+  Collab's NDCG@10/MAP@10 (see [Discussion](#discussion) for the metric-by-
+  metric breakdown) at a small fraction of the training and inference
+  cost.
 - **LightGCN: do not deploy.** Worst accuracy of any model in both runs,
-  zero cold-user hits in the latest run, and by far the most expensive to
-  train (up to 3.6 hours vs. under 2 minutes for every other model
-  combined). Needs a proper ablation study before it's worth revisiting.
+  zero hits in the 5-9-interaction band in the latest run, and by far the
+  most expensive to train (up to 3.6 hours vs. under 2 minutes for every
+  other model combined). Needs a proper ablation study before it's worth
+  revisiting.
 
 ## Limitations & Future Work
 
@@ -249,17 +281,25 @@ covering different lifecycle stages.
 - **Single train/test split, no cross-validation** — these numbers have
   unknown variance; a second seed or k-fold run would show how stable
   the ranking between models actually is, and whether the Hybrid-vs-Collab
-  cold-user gap (or lack thereof) is real or eval-sample noise.
+  gap in the 5-9-interaction band (or lack thereof) is real or eval-sample
+  noise. Collab's own P@10 already varies 0.1490 → 0.1510 between the two
+  runs recorded so far under an unchanged config, which is roughly the
+  same order as its margin over SVD — a caution against reading small
+  differences in this report as more meaningful than they are.
 - **300 sampled eval users, not the full user base**, for evaluation
   speed. Directionally reliable but not the last word on exact values —
-  the cold-user segment (n=59) especially should be treated as noisy.
-- **1,653 test interactions on cold-start items were dropped** from every
-  model's ground truth. This is standard practice (no model here has an
-  embedding for an item it never trained on), but it also means none of
-  these numbers say anything about cold-start-*item* performance (as
-  opposed to cold-start-*user* performance, which the segment table does
-  measure) — that's a separate, qualitative claim in the Production
-  Readiness table above.
+  the 5-9-interaction band (n=59) especially should be treated as noisy.
+- **This benchmark measures no true cold-start performance at all.**
+  `MIN_USER_INTERACTIONS=5` excludes every user with fewer than 5
+  interactions before evaluation starts (see
+  [Catalog Coverage & User Segments](#catalog-coverage--user-segments)),
+  and 1,653 test interactions on items with zero training interactions
+  were dropped from every model's ground truth (standard practice, since
+  no model here has an embedding for an item it never trained on). Neither
+  the `NEW` (0 ratings) nor `COLD_START` (1-5 ratings) stages in
+  `models/recommendation_router.py` are measured by any number in this
+  report — cold-start handling here is a qualitative design claim (the
+  Production Readiness table above), not something these metrics test.
 - **No production load-testing.** Reported inference latency is
   single-request Python-side timing in a benchmark script, not a served
   API under concurrent load.

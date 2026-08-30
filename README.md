@@ -145,14 +145,19 @@ Metric implementations: `evaluation/metrics.py`.
 | LightFM Hybrid | 0.1410 | 0.1559 | 0.2025 | 108.4s |
 | LightGCN | 0.0173 | 0.0108 | 0.0192 | 13051.5s |
 
-LightFM Collaborative wins on ranking accuracy; SVD is within 2% of it at a
-fraction of the training/inference cost. LightGCN is not production-ready —
-a recent round of tuning (embedding normalization, smaller batches) made it
-*worse*, not better, including zero correct recommendations for every
-cold-start user in this run; see RESULTS.md for the full regression
-analysis. Full metrics (P/R/NDCG/MAP@10/20, catalog coverage, cold/light/
-heavy user segments, LightFM score-distribution diagnostics, methodology,
-and known limitations): **[RESULTS.md](RESULTS.md)**. Raw per-run numbers:
+LightFM Collaborative is numerically best, though its margin over SVD is
+close to the run-to-run noise Collab itself shows across the two runs
+recorded so far — SVD trails by only ~2% on NDCG@10/MAP@10 (up to ~8% on
+other metrics) at a fraction of the training/inference cost. LightGCN is
+not production-ready: even its best configuration trails SVD by a wide
+margin at roughly 790x the training cost, and a recent round of tuning
+(embedding normalization + a smaller batch size, changed together) made it
+*worse*, not better, including zero correct recommendations in the eval's
+lowest interaction-count band (5-9 interactions — not true cold-start
+users) this run; see RESULTS.md for the full regression analysis. Full
+metrics (P/R/NDCG/MAP@10/20, catalog coverage, interaction-count segments,
+LightFM score-distribution diagnostics, methodology, and known
+limitations): **[RESULTS.md](RESULTS.md)**. Raw per-run numbers:
 [results/metrics.csv](results/metrics.csv).
 
 **Score distribution diagnostic (LightFM):** ROC-AUC alone can hide *why*
