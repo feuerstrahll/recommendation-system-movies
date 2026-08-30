@@ -64,6 +64,11 @@ intuitively than a single AUC scalar).
 
 Usage:
   python evaluation/compare_models.py
+
+Every run's console output is also saved to a timestamped file under
+results/logs/run_<YYYYMMDD_HHMMSS>.log (pass --no-log-file to skip this),
+so past runs stay available for comparison without needing to remember
+`tee` at the command line.
 """
 
 from __future__ import annotations
@@ -1044,6 +1049,27 @@ def run_comparison(
     return df
 
 
+LOG_DIR = Path(__file__).parent.parent / "results" / "logs"
+
+
+class _Tee:
+    """Writes to both the real stdout and a log file, so every print() in a
+    run is captured without touching each print call individually. tqdm's
+    progress bars default to stderr, so they don't end up in the saved log.
+    """
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate recommendation models.")
     parser.add_argument(
@@ -1057,14 +1083,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-users", type=int, default=N_EVAL_USERS)
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--lightfm-epochs", type=int, default=LIGHTFM_EPOCHS)
+    parser.add_argument(
+        "--no-log-file",
+        action="store_true",
+        help="Skip saving a timestamped copy of this run's output under results/logs/.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run_comparison(
-        n_eval_users=args.eval_users,
-        models=[m.strip() for m in args.models.split(",") if m.strip()],
-        max_rows=args.max_rows,
-        lightfm_epochs=args.lightfm_epochs,
-    )
+
+    log_path = None
+    log_file = None
+    if not args.no_log_file:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        log_path = LOG_DIR / f"run_{timestamp}.log"
+        log_file = open(log_path, "w", encoding="utf-8")
+        sys.stdout = _Tee(sys.__stdout__, log_file)
+        print(f"Logging this run to {log_path}")
+
+    try:
+        run_comparison(
+            n_eval_users=args.eval_users,
+            models=[m.strip() for m in args.models.split(",") if m.strip()],
+            max_rows=args.max_rows,
+            lightfm_epochs=args.lightfm_epochs,
+        )
+    finally:
+        # flush/close even on a crash or Ctrl+C, so a partial run's output
+        # isn't lost to buffering.
+        if log_file is not None:
+            sys.stdout = sys.__stdout__
+            log_file.close()
