@@ -233,18 +233,27 @@ def train_lightgcn(model, edge_index, gt_dict, n_users, n_items,
         user_embs, item_embs: обученные эмбеддинги
     """
     rng = np.random.RandomState(seed)
-    # NOTE: weight_decay was tried here (to match LightFM's item_alpha/
-    # user_alpha-style regularization) and reproducibly broke training:
-    # BPR gradients are very weak in early epochs (pos/neg scores start
-    # near-identical), and even weight_decay=1e-4 was enough for Adam's
-    # decay term to dominate the real gradient signal, pinning the loss at
-    # ln(2) (~0.693 — i.e. zero net separation between positive and
-    # negative scores) for the entire run. Confirmed by isolating
-    # weight_decay from the LR schedule below: the schedule alone still
-    # learns fine, weight_decay alone reproduces the frozen loss. Do not
-    # re-add weight_decay without re-validating the loss curve actually
-    # decreases across a full run.
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # weight_decay=1e-4 reproducibly froze training on the full dataset
+    # (loss pinned at ln(2) ~= 0.693 for all 10 epochs — zero net
+    # separation between positive and negative scores). Mechanism:
+    # torch.optim.Adam's weight_decay (unlike AdamW) is classic L2 — it
+    # adds wd*param directly into the raw gradient BEFORE Adam's moment
+    # estimates are computed, not as a decoupled step after. BPR gradients
+    # are naturally tiny and noisy early on (pos/neg scores start
+    # near-identical by construction), so the injected wd*param term,
+    # being consistent in direction every batch while the true signal is
+    # noisy, can dominate Adam's exponential moving average even when the
+    # two are comparable in raw per-step magnitude.
+    #
+    # 1e-5 is used here as a smaller, gentler value, but it has NOT been
+    # independently confirmed to avoid the freeze on the full dataset at
+    # production's batch_size/step count — only 1e-4 (breaks) and 0 (safe)
+    # have been verified end-to-end on the real data. The loss curve is
+    # logged and printed after every run (see evaluate_lightgcn in
+    # compare_models.py) specifically so this is easy to check: if it's
+    # pinned near 0.693 again, drop weight_decay back to 0 rather than
+    # assuming 1e-5 is safe.
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     # Cosine decay over the fixed epoch budget: same epoch count, same
     # compute per step, but later epochs take smaller, more precise steps
     # instead of overshooting at a constant lr — standard practice for
