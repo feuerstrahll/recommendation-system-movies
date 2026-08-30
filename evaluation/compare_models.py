@@ -660,10 +660,15 @@ def evaluate_lightgcn(
     # each epoch (not one triple per user total), so one LightGCN epoch and
     # one LightFM epoch both mean "one pass over every positive interaction"
     # — deliberately equalized, not copy-pasted from LightFM's default.
+    #
+    # batch_size=2048 (down from 8192): smaller batches mean noisier
+    # per-step gradients, which can help escape the kind of plateau this
+    # model was landing in — tradeoff is more optimizer.step() calls per
+    # epoch (slower), acceptable at epochs=10.
     t0 = time.perf_counter()
     user_embs, item_embs, losses = train_lightgcn(
         model, edge_index, gt_dict, n_users, n_items,
-        user_map, item_map, lr=0.001, epochs=10, batch_size=8192,
+        user_map, item_map, lr=0.001, epochs=10, batch_size=2048,
     )
     train_time = time.perf_counter() - t0
     print(f"  Train time: {train_time:.1f}s")

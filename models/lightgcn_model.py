@@ -168,11 +168,22 @@ class LightGCN(nn.Module):
         # Усреднение эмбеддингов всех слоёв (ключевая идея LightGCN)
         embs = torch.stack(embs, dim=0)  # (K+1, N, D)
         embs = torch.mean(embs, dim=0)   # (N, D)
-        
+
         # Разделяем на пользователей и фильмы
         user_embs = embs[:self.n_users]
         item_embs = embs[self.n_users:]
-        
+
+        # L2-normalize before returning: unnormalized dot-product scores are
+        # influenced by embedding magnitude, which correlates with node
+        # degree (popular items/active users accumulate larger norms
+        # through repeated graph convolution) — this biases scores toward
+        # popularity rather than actual relevance. Normalizing turns the
+        # score into cosine similarity, removing that magnitude effect.
+        # Applied here (not just at eval time) so training's BPR loss
+        # optimizes the same geometry the model is evaluated on.
+        user_embs = F.normalize(user_embs, p=2, dim=1)
+        item_embs = F.normalize(item_embs, p=2, dim=1)
+
         return user_embs, item_embs
 
 
